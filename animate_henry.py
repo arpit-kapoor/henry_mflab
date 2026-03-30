@@ -60,7 +60,7 @@ def animate_henry(
     Lx = 2.0  # horizontal extent (m)
     Lz = 1.0  # vertical extent (m)
     x = np.linspace(0, Lx, ncol)
-    z = np.linspace(0, -Lz, nlay)
+    z = np.linspace(Lz, 0, nlay)
     X, Z = np.meshgrid(x, z)
     
     # Determine frames to plot
@@ -72,15 +72,19 @@ def animate_henry(
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
     fig.suptitle("Henry Problem: Saltwater Intrusion", fontsize=14, fontweight='bold')
     
-    # Pre-compute color limits for consistent scaling
-    head_vmin, head_vmax = head_data.min(), head_data.max()
-    conc_vmin, conc_vmax = conc_data.min(), conc_data.max()
+    # Pre-compute color limits for consistent scaling, ignoring dummy values (e.g. 1e30)
+    head_valid = head_data[head_data < 1e20]
+    head_vmin, head_vmax = head_valid.min(), head_valid.max()
+    
+    conc_valid = conc_data[conc_data < 1e20]
+    conc_vmin, conc_vmax = conc_valid.min(), conc_valid.max()
     
     # Initialize plots
     ax_head, ax_conc = axes
     
-    # Head subplot
-    im_head = ax_head.contourf(X, Z, head_data[0], levels=20, cmap='Blues', 
+    # Head subplot - masking dummy values
+    head_plot0 = np.where(head_data[0] < 1e20, head_data[0], np.nan)
+    im_head = ax_head.contourf(X, Z, head_plot0, levels=20, cmap='Blues', 
                                vmin=head_vmin, vmax=head_vmax)
     ax_head.set_xlabel('Distance (m)', fontsize=11)
     ax_head.set_ylabel('Elevation (m)', fontsize=11)
@@ -88,8 +92,9 @@ def animate_henry(
     ax_head.set_aspect('equal')
     cbar_head = fig.colorbar(im_head, ax=ax_head, label='Head (m)')
     
-    # Concentration subplot
-    im_conc = ax_conc.contourf(X, Z, conc_data[0], levels=20, cmap='Reds',
+    # Concentration subplot - masking dummy values
+    conc_plot0 = np.where(conc_data[0] < 1e20, conc_data[0], np.nan)
+    im_conc = ax_conc.contourf(X, Z, conc_plot0, levels=20, cmap='Reds',
                                vmin=conc_vmin, vmax=conc_vmax)
     ax_conc.set_xlabel('Distance (m)', fontsize=11)
     ax_conc.set_ylabel('Elevation (m)', fontsize=11)
@@ -113,10 +118,13 @@ def animate_henry(
         for coll in ax_conc.collections:
             coll.remove()
         
-        # Plot new data
-        ax_head.contourf(X, Z, head_data[idx], levels=20, cmap='Blues',
+        # Plot new data - ignoring dummy values
+        head_plot = np.where(head_data[idx] < 1e20, head_data[idx], np.nan)
+        conc_plot = np.where(conc_data[idx] < 1e20, conc_data[idx], np.nan)
+        
+        ax_head.contourf(X, Z, head_plot, levels=20, cmap='Blues',
                         vmin=head_vmin, vmax=head_vmax)
-        ax_conc.contourf(X, Z, conc_data[idx], levels=20, cmap='Reds',
+        ax_conc.contourf(X, Z, conc_plot, levels=20, cmap='Reds',
                         vmin=conc_vmin, vmax=conc_vmax)
         
         # Update time text

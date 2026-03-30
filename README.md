@@ -61,13 +61,13 @@ Options:
 **Classic Henry saltwater intrusion** in a 2D vertical cross-section:
 
 ```
-Freshwater →                    Ocean/Seawater
-┌─────────────────────────────────────┐  ← Top (z = 0)
-│  HEAD = 1.0                HEAD = 0 │
-│  CONC = 0        ←flow→    CONC = 0 │
+Freshwater Inflow →             Ocean/Seawater (Hydrostatic)
+┌─────────────────────────────────────┐  ← Top (z = 1.0 m)
+│  Q = 5.7 m³/d              GHB Pkg  │
+│  CONC = 0.0      ←flow→   CONC = 35 │
 │         Saltwater wedge             │
-│              ↗ (from inlet)         │
-└─────────────────────────────────────┘  ← Bottom (z = -1.0)
+│              ↗ (from ocean)         │
+└─────────────────────────────────────┘  ← Bottom (z = 0.0 m)
 ├────────── 2.0 m ────────────────────┤
 ```
 
@@ -84,24 +84,26 @@ Freshwater →                    Ocean/Seawater
 
 | Parameter | Symbol | Value | Units |
 |-----------|--------|-------|-------|
-| Hydraulic conductivity (horizontal) | K_h | 1.0 | m/day |
-| Hydraulic conductivity (vertical) | K_v | 1.0 | m/day |
+| Hydraulic conductivity (horizontal) | K_h | 864.0 | m/day |
+| Hydraulic conductivity (vertical) | K_v | 864.0 | m/day |
 | Porosity | θ | 0.35 | - |
-| Longitudinal dispersivity | α_L | 0.1 | m |
-| Transverse dispersivity | α_T | 0.01 | m |
-| Inlet concentration | C_inlet | 35.0 | g/L |
+| Molecular diffusion coefficient | D_m | 0.57024 | m²/day |
+| Longitudinal dispersivity | α_L | 0.0 | m |
+| Transverse dispersivity | α_T | 0.0 | m |
+| Freshwater inflow rate | Q_in | 5.7024 | m³/day |
+| Seawater concentration | C_ocean | 35.0 | g/L |
 
 ### Boundary Conditions
 
 **Flow (GWF):**
-- Left boundary: Constant head = 1.0 m (freshwater inflow)
-- Right boundary: Constant head = 0.0 m (ocean level)
-- Initial: Head = 0.0 everywhere
+- Left boundary: Specified flux (`WEL` package) total inflow = 5.7024 m³/d
+- Right boundary: Hydrostatic mixed boundary (`GHB` package)
+- Initial: Head = 35.0 everywhere
 
 **Transport (GWT):**
-- Left boundary: Constant concentration = 35.0 g/L (saltwater)
-- Right boundary: Concentration = 0.0 g/L
-- Initial: Concentration = 0.0 everywhere
+- Left boundary (`WEL`): Concentration = 0.0 g/L (freshwater injection)
+- Right boundary (`GHB`): Concentration = 35.0 g/L for water entering the domain
+- Initial: Concentration = 35.0 g/L everywhere (domain is initially filled with seawater)
 
 ## 📊 Equations Solved
 
@@ -128,24 +130,24 @@ Solves for salt concentration **C** using UPSTREAM scheme for advection.
 - **DIS**: Discretization
 - **IC**: Initial conditions
 - **NPF**: Node Property Flow (hydraulic conductivity)
-- **CHD**: Constant head boundaries
+- **GHB**: General-Head Boundary (hydrostatic right boundary)
+- **WEL**: Well package (specified freshwater flux on left boundary)
+- **BUY**: Buoyancy package (couples density/concentration to flow equations)
 - **OC**: Output control (saves all time steps)
 
 ### GWT (Groundwater Transport) Model
 - **DIS**: Discretization
 - **IC**: Initial conditions
 - **ADV**: Advection package (UPSTREAM scheme)
-- **DSP**: Dispersion package
-- **CNC**: Constant concentration boundary
-- **SSM**: Source/Sink Mixing
+- **DSP**: Dispersion package (pure molecular diffusion, $D_m = 0.57024$, off-diagonal disabled)
+- **SSM**: Source/Sink Mixing (transfers flow boundaries `WEL` and `GHB` values)
 - **MST**: Mobile Storage Transfer (porosity)
 - **OC**: Output control (saves all time steps)
 
 ## ⚠️ Important Notes
 
-1. **One-way coupling**: Flow → Transport (not density-dependent)
-   - For true variable-density flow, use SEAWAT or MODFLOW 6 Buy package
-   - This simplified setup is common for ML training datasets
+1. **Two-way density coupling**: Flow $\leftrightarrow$ Transport
+   - Active variable-density coupling is enabled natively in MODFLOW 6 via the `BUY` (Buoyancy) package. The transport model maps seawater concentration back to hydraulic density driving the wedge.
 
 2. **File sizes**: Saving all 500 time steps creates ~13 MB files
    - To save only final state, change `saverecord=[("HEAD", "LAST")]` in `run_henry.py`

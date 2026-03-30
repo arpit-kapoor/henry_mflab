@@ -14,21 +14,15 @@ def build_and_run_henry(
     Lz=1.0,
     total_time=0.5,
     nstp=500,
-    cinlet=35.0,  # g/L saline left (arbitrary units)
+    cinlet=35.0,  # seawater concentration
     por=0.35,
-    hk=1.0,
-    vk=1.0,
-    al=0.1,
-    at=0.01,
+    hk=864.0,
+    vk=864.0,
+    al=0.0,
+    at=0.0,
+    diffc=0.57024,
+    inflow=5.7024,
 ):
-    """
-    Minimal Henry: 2D column (x-z), 1 row, variable-density-like transport
-    using MODFLOW 6 GWT (note: MF6 GWT is species transport; density coupling
-    is not automatic—this demo treats classic Henry transport without buoyancy
-    feedback; for buoyancy-coupled cases you'd use SEAWAT or MF6 with advanced
-    coupling; for ML dataset of the steady wedge, this setup is commonly used).
-    """
-
     ws = pl.Path(workspace)
     ws.mkdir(parents=True, exist_ok=True)
 
@@ -37,8 +31,8 @@ def build_and_run_henry(
     delr = Lx / ncol
     delc = 1.0
     delv = Lz / nlay
-    top = 0.0
-    botm = [-delv * (k + 1) for k in range(nlay)]
+    top = Lz
+    botm = [Lz - delv * (k + 1) for k in range(nlay)]
     perlen = [total_time]
     nper = 1
     nstp = [nstp]
@@ -46,78 +40,83 @@ def build_and_run_henry(
 
     sim = flopy.mf6.MFSimulation(sim_name="henry", sim_ws=str(ws), exe_name="mf6")
 
-    # TDIS
     flopy.mf6.ModflowTdis(
         sim, time_units="DAYS", nper=nper, perioddata=list(zip(perlen, nstp, tsmult))
     )
 
-    # --- IMS: create TWO solvers and register in order (GWF first, then GWT) ---
+    nouter, ninner = 100, 300
+    hclose, rclose, relax = 1e-10, 1e-6, 0.97
+    
     ims_gwf = flopy.mf6.ModflowIms(
-        sim, print_option="SUMMARY", complexity="SIMPLE", filename="gwf.ims",
-        linear_acceleration="BICGSTAB"  # Required for asymmetric matrix
+        sim, print_option="SUMMARY", outer_dvclose=hclose, outer_maximum=nouter,
+        under_relaxation="NONE", inner_maximum=ninner, inner_dvclose=hclose,
+        rcloserecord=rclose, linear_acceleration="BICGSTAB", scaling_method="NONE",
+        reordering_method="NONE", relaxation_factor=relax, filename="gwf.ims"
     )
     ims_gwt = flopy.mf6.ModflowIms(
-        sim, print_option="SUMMARY", complexity="SIMPLE", filename="gwt.ims",
-        linear_acceleration="BICGSTAB"  # Use same solver for consistency
+        sim, print_option="SUMMARY", outer_dvclose=hclose, outer_maximum=nouter,
+        under_relaxation="NONE", inner_maximum=ninner, inner_dvclose=hclose,
+        rcloserecord=rclose, linear_acceleration="BICGSTAB", scaling_method="NONE",
+        reordering_method="NONE", relaxation_factor=relax, filename="gwt.ims"
     )
 
-    # ---------------- GWF (flow) ----------------
     gwf = flopy.mf6.ModflowGwf(
-        sim, modelname="gwf", newtonoptions="NEWTON", save_flows=True
+        sim, modelname="gwf", save_flows=True
     )
 
-    # DIS
     flopy.mf6.ModflowGwfdis(
         gwf, nlay=nlay, nrow=nrow, ncol=ncol, delr=delr, delc=delc, top=top, botm=botm
     )
 
-    # IC (initial head)
-    flopy.mf6.ModflowGwfic(gwf, strt=0.0)
+    flopy.mf6.ModflowGwfic(gwf, strt=35.0)
 
-    # NPF (conductivity)
-    flopy.mf6.ModflowGwfnpf(gwf, icelltype=0, k=hk, k33=vk)
+    flopy.mf6.ModflowGwfnpf(
+        gwf, icelltype=0, k=hk, k33=vk, save_specific_discharge=True
+    )
 
-    # Constant head: left & right boundaries (classic Henry mixed boundary at right)
-    chd_spd = []
-    for k in range(nlay):
-        chd_spd.append(((k, 0, 0), 1.0, 0.0))  # left column head = 1.0, conc = 0.0
-        chd_spd.append(((k, 0, ncol - 1), 0.0, 0.0))  # right column head = 0.0, conc = 0.0
-    flopy.mf6.ModflowGwfchd(gwf, stress_period_data=chd_spd, pname="CHD",
-                           auxiliary=["CONCENTRATION"])
+    flopy.mf6.ModflowGwfbuy(
+        gwf, packagedata=[(0, 0.7, 0.0, "gwt", "concentration")]
+    )
 
-    # Output control - save all time steps for animation
+    ghbcond = hk * delv * delc / (0.5 * delr)
+    ghb_spd = [[(k, 0, ncol - 1), top, ghbcond, 35.0] for k in range(nlay)]
+    flopy.mf6.ModflowGwfghb(
+        gwf, stress_period_data=ghb_spd, pname="GHB-1",
+        auxiliary="CONCENTRATION"
+    )
+
+    wel_spd = [[(k, 0, 0), inflow / nlay, 0.0] for k in range(nlay)]
+    flopy.mf6.ModflowGwfwel(
+        gwf, stress_period_data=wel_spd, pname="WEL-1",
+        auxiliary="CONCENTRATION"
+    )
+
     flopy.mf6.ModflowGwfoc(
         gwf,
         head_filerecord="gwf.hds",
         budget_filerecord="gwf.cbc",
-        saverecord=[("HEAD", "ALL")],
+        saverecord=[("HEAD", "ALL"), ("BUDGET", "ALL")],
         printrecord=[("HEAD", "LAST"), ("BUDGET", "LAST")],
     )
 
-    # ---------------- GWT (transport) ----------------
     gwt = flopy.mf6.ModflowGwt(sim, modelname="gwt", save_flows=True)
 
     flopy.mf6.ModflowGwtdis(
         gwt, nlay=nlay, nrow=nrow, ncol=ncol, delr=delr, delc=delc, top=top, botm=botm
     )
-    flopy.mf6.ModflowGwtic(gwt, strt=0.0)
+    flopy.mf6.ModflowGwtic(gwt, strt=35.0)
 
-    # Advection + dispersion
-    flopy.mf6.ModflowGwtadv(gwt, scheme="UPSTREAM")  # change to "TVD" later if desired
-    flopy.mf6.ModflowGwtdsp(gwt, alh=al, ath1=at)
+    flopy.mf6.ModflowGwtadv(gwt, scheme="UPSTREAM")
+    flopy.mf6.ModflowGwtdsp(gwt, alh=al, ath1=at, xt3d_off=True, diffc=diffc)
 
-    # Sources: left boundary at fixed concentration (Dirichlet via CNC)
-    cnc_spd = [((k, 0, 0), cinlet) for k in range(nlay)]
-    flopy.mf6.ModflowGwtcnc(gwt, stress_period_data=cnc_spd, pname="CNC")
-    
-    # Add SSM package for GWT model
-    sourcerecarray = [("CHD", "AUX", "CONCENTRATION")]
+    sourcerecarray = [
+        ("GHB-1", "AUX", "CONCENTRATION"),
+        ("WEL-1", "AUX", "CONCENTRATION"),
+    ]
     flopy.mf6.ModflowGwtssm(gwt, sources=sourcerecarray)
 
-    # Mass storage params
     flopy.mf6.ModflowGwtmst(gwt, porosity=por)
 
-    # Output control for concentration
     flopy.mf6.ModflowGwtoc(
         gwt,
         concentration_filerecord="gwt.ucn",
@@ -126,56 +125,20 @@ def build_and_run_henry(
         printrecord=[("CONCENTRATION", "LAST"), ("BUDGET", "LAST")],
     )
 
-    # Register IMS packages to models (GWF FIRST, then GWT)
     sim.register_ims_package(ims_gwf, [gwf.name])
     sim.register_ims_package(ims_gwt, [gwt.name])
 
-    # Register GWF-GWT exchange
     flopy.mf6.ModflowGwfgwt(sim, exgtype="GWF6-GWT6", exgmnamea="gwf", exgmnameb="gwt")
 
-    # --- Write & run with stronger diagnostics ---
-    # If you want each run isolated automatically, use a fresh subfolder like:
-    # ws_run = ws / f"run_{np.random.randint(1e9):09d}"
-    # ws_run.mkdir(parents=True, exist_ok=True)
-    # sim.simulation_data.mfpath.set_sim_path(str(ws_run))
 
     sim.write_simulation()
-    print(f"[INFO] Simulation path: {gwf.simulation_data.mfpath.get_sim_path()}")
-
-    # Show mf6 stdout/stderr; collect messages if it fails
+    
     success, buff = sim.run_simulation(silent=False)
 
     if not success:
-        from pathlib import Path
+        raise RuntimeError("MODFLOW 6 failed")
 
-        simdir = Path(gwf.simulation_data.mfpath.get_sim_path())
-        lst = simdir / "mfsim.lst"
-
-        msg = []
-        msg.append("[ERROR] MODFLOW 6 failed to run.")
-        msg.append("---- mf6 stdout/stderr (buff) ----")
-        try:
-            msg.append("\n".join(buff))
-        except Exception:
-            msg.append("(no buff)")
-
-        msg.append("---- directory listing ----")
-        try:
-            msg.append("\n".join(sorted(p.name for p in simdir.iterdir())))
-        except Exception:
-            msg.append("(cannot list dir)")
-
-        msg.append("---- mfsim.lst (tail) ----")
-        try:
-            msg.append("\n".join(lst.read_text(errors="ignore").splitlines()[-200:]))
-        except Exception:
-            msg.append("(no mfsim.lst)")
-
-        raise RuntimeError("\n".join(msg))
-
-    # Read outputs
     hobj = flopy.utils.HeadFile(ws / "gwf.hds")
-    # Use HeadFile for concentration as well (works better with MF6)
     cobj = flopy.utils.HeadFile(ws / "gwt.ucn", text="CONCENTRATION")
 
     head = hobj.get_alldata()[-1].squeeze()  # (nlay, ncol)
