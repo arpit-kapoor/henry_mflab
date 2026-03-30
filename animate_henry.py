@@ -98,9 +98,9 @@ def animate_henry(
                                vmin=conc_vmin, vmax=conc_vmax)
     ax_conc.set_xlabel('Distance (m)', fontsize=11)
     ax_conc.set_ylabel('Elevation (m)', fontsize=11)
-    ax_conc.set_title('Concentration (g/L)', fontsize=12)
+    ax_conc.set_title('Concentration (kg/m³)', fontsize=12)
     ax_conc.set_aspect('equal')
-    cbar_conc = fig.colorbar(im_conc, ax=ax_conc, label='Concentration (g/L)')
+    cbar_conc = fig.colorbar(im_conc, ax=ax_conc, label='Concentration (kg/m³)')
     
     # Time annotation
     time_text = fig.text(0.5, 0.02, '', ha='center', fontsize=11, 
