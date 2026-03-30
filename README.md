@@ -40,7 +40,7 @@ This generates:
 ### 2. Create Animation
 
 ```bash
-python animate_henry.py --skip 5 --fps 30
+uv run python animate_henry.py --skip 5 --fps 30
 ```
 
 Options:
@@ -65,10 +65,10 @@ Freshwater →                    Ocean/Seawater
 ┌─────────────────────────────────────┐  ← Top (z = 0)
 │  HEAD = 1.0                HEAD = 0 │
 │  CONC = 0        ←flow→    CONC = 0 │
-│         Saltwater wedge              │
-│              ↗ (from inlet)          │
+│         Saltwater wedge             │
+│              ↗ (from inlet)         │
 └─────────────────────────────────────┘  ← Bottom (z = -1.0)
-├────────── 2.0 m ─────────────────────┤
+├────────── 2.0 m ────────────────────┤
 ```
 
 ### Domain
