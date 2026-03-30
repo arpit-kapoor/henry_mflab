@@ -21,7 +21,7 @@ def build_and_run_henry(
     al=0.0,
     at=0.0,
     diffc=0.57024,
-    inflow=5.7024,
+    inflow=2.851,
 ):
     ws = pl.Path(workspace)
     ws.mkdir(parents=True, exist_ok=True)
