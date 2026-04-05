@@ -32,6 +32,30 @@ uv sync
 uv run python run_henry.py
 ```
 
+Useful options for experiments:
+
+```bash
+# Single run with custom coupling and full time series export
+uv run python run_henry.py \
+   --mode single \
+   --outdir ./out_single \
+   --mf6-exe ./.venv/bin/mf6 \
+   --beta-c 0.7 \
+   --diffc 0.57024 \
+   --al 0.0 --at 0.0 \
+   --save-timeseries
+
+# Parametric sweep for FNO dataset generation
+uv run python run_henry.py \
+   --mode sweep \
+   --outdir ./data_medium \
+   --mf6-exe ./.venv/bin/mf6 \
+   --beta-c-values 0.0,0.2,0.4,0.7,1.0 \
+   --diffc-values 0.57024,0.28512,0.14256,0.07128 \
+   --al-values 0.0,0.005,0.01 \
+   --at-values 0.0,0.001
+```
+
 This generates:
 - `out/gwf.hds` - Hydraulic head data (13 MB, 500 time steps)
 - `out/gwt.ucn` - Concentration data (13 MB, 500 time steps)
@@ -149,10 +173,24 @@ Solves for salt concentration **C** using UPSTREAM scheme for advection.
 1. **Two-way density coupling**: Flow $\leftrightarrow$ Transport
    - Active variable-density coupling is enabled natively in MODFLOW 6 via the `BUY` (Buoyancy) package. The transport model maps seawater concentration back to hydraulic density driving the wedge.
 
-2. **File sizes**: Saving all 500 time steps creates ~13 MB files
+2. **Coupling control for experiments**
+   - Use `--beta-c` for single runs or `--beta-c-values` for sweeps to dial coupling strength.
+   - `--beta-c 0.0` gives an uncoupled baseline (no concentration effect on density).
+
+   - If MODFLOW 6 is not on PATH, pass `--mf6-exe ./.venv/bin/mf6`.
+
+3. **Sharp front challenge controls**
+   - Use `--diffc`, `--al`, and `--at` (or corresponding sweep lists) to change mixing-front sharpness.
+   - Lower `diffc` and smaller dispersivities generally produce sharper fronts.
+
+4. **Nonlinear density law caveat**
+   - Current setup uses MODFLOW 6 `BUY`, which is linear in concentration.
+   - Exponential density coupling is not natively available in this workflow and should be treated as a separate phase.
+
+5. **File sizes**: Saving all 500 time steps creates ~13 MB files
    - To save only final state, change `saverecord=[("HEAD", "LAST")]` in `run_henry.py`
 
-3. **Animation performance**: Use `--skip` option to reduce rendering time
+6. **Animation performance**: Use `--skip` option to reduce rendering time
    - `--skip 5`: renders every 5th time step (100 frames instead of 500)
    - `--skip 10`: renders every 10th time step (50 frames)
 
@@ -172,6 +210,19 @@ out/
 ├── henry_final.npz      # Final state (NumPy arrays)
 ├── henry_animation.mp4  # Animation (MP4 video)
 └── henry_animation.gif  # Animation (GIF, larger file)
+```
+
+Sweep outputs:
+
+```
+data_medium/
+├── beta0.000_diffc0.57024_al0.0000_at0.0000/
+│   ├── gwf.hds
+│   ├── gwt.ucn
+│   ├── henry_final.npz
+│   └── henry_timeseries.npz
+├── ...
+└── manifest.json
 ```
 
 ## 🛠️ Dependencies
