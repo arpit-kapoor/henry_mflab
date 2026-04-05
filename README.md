@@ -35,31 +35,25 @@ uv run python run_henry.py
 Useful options for experiments:
 
 ```bash
-# Single run with custom coupling and full time series export
+# Configurable dataset generation (single unified workflow)
 uv run python run_henry.py \
-   --mode single \
-   --outdir ./out_single \
+   --outdir ./data_configurable \
    --mf6-exe ./.venv/bin/mf6 \
-   --beta-c 0.7 \
-   --diffc 0.57024 \
-   --al 0.0 --at 0.0 \
+   --beta-c-values 0.0,0.3,0.7,1.2 \
+   --diffc-values 0.57024,0.28512 \
+   --inflow-values 2.4,2.851,3.2 \
+   --ghb-head-values 0.98,1.0,1.02 \
+   --cinlet-values 34.5,35.0 \
+   --strt-head-values 34.0,35.0 \
+   --strt-conc-values 34.0,35.0 \
+   --right-bc-kind ghb_head \
+   --max-runs 200 \
    --save-timeseries
-
-# Parametric sweep for FNO dataset generation
-uv run python run_henry.py \
-   --mode sweep \
-   --outdir ./data_medium \
-   --mf6-exe ./.venv/bin/mf6 \
-   --beta-c-values 0.0,0.2,0.4,0.7,1.0 \
-   --diffc-values 0.57024,0.28512,0.14256,0.07128 \
-   --al-values 0.0,0.005,0.01 \
-   --at-values 0.0,0.001
 ```
 
 This generates:
-- `out/gwf.hds` - Hydraulic head data (13 MB, 500 time steps)
-- `out/gwt.ucn` - Concentration data (13 MB, 500 time steps)
-- `out/henry_final.npz` - Final time step data (head and conc arrays)
+- `data_configurable/<sample_id>/sample.npz` - FNO-ready sample with input/output tensors and metadata
+- `data_configurable/manifest.json` - run metadata, failure logs, and train/val/test split IDs
 
 ### 2. Create Animation
 
@@ -174,13 +168,13 @@ Solves for salt concentration **C** using UPSTREAM scheme for advection.
    - Active variable-density coupling is enabled natively in MODFLOW 6 via the `BUY` (Buoyancy) package. The transport model maps seawater concentration back to hydraulic density driving the wedge.
 
 2. **Coupling control for experiments**
-   - Use `--beta-c` for single runs or `--beta-c-values` for sweeps to dial coupling strength.
-   - `--beta-c 0.0` gives an uncoupled baseline (no concentration effect on density).
+   - Use `--beta-c-values` to dial coupling strength across the dataset.
+   - Include `0.0` in `--beta-c-values` for an uncoupled baseline.
 
    - If MODFLOW 6 is not on PATH, pass `--mf6-exe ./.venv/bin/mf6`.
 
 3. **Sharp front challenge controls**
-   - Use `--diffc`, `--al`, and `--at` (or corresponding sweep lists) to change mixing-front sharpness.
+   - Use `--diffc-values`, `--al-values`, and `--at-values` to change mixing-front sharpness.
    - Lower `diffc` and smaller dispersivities generally produce sharper fronts.
 
 4. **Nonlinear density law caveat**
@@ -212,15 +206,14 @@ out/
 └── henry_animation.gif  # Animation (GIF, larger file)
 ```
 
-Sweep outputs:
+Dataset outputs:
 
 ```
-data_medium/
-├── beta0.000_diffc0.57024_al0.0000_at0.0000/
+data_configurable/
+├── sample_000001_beta0.000_diffc0.57024_in2.8510/
 │   ├── gwf.hds
 │   ├── gwt.ucn
-│   ├── henry_final.npz
-│   └── henry_timeseries.npz
+│   └── sample.npz
 ├── ...
 └── manifest.json
 ```
