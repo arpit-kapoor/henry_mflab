@@ -35,25 +35,24 @@ uv run python run_henry.py
 Useful options for experiments:
 
 ```bash
-# Configurable dataset generation (single unified workflow)
+# Scenario-windowed dataset generation for model training
 uv run python run_henry.py \
-   --outdir ./data_configurable \
+   --outdir ./data_windowed \
    --mf6-exe ./.venv/bin/mf6 \
-   --beta-c-values 0.0,0.3,0.7,1.2 \
-   --diffc-values 0.57024,0.28512 \
+   --scenario-pairs 0.0:0.57024,0.7:0.57024,1.2:0.28512 \
+   --lag 1 \
+   --warm-start \
+   --hk-values 700,864,1000 \
+   --por-values 0.30,0.35,0.40 \
    --inflow-values 2.4,2.851,3.2 \
    --ghb-head-values 0.98,1.0,1.02 \
-   --cinlet-values 34.5,35.0 \
-   --strt-head-values 34.0,35.0 \
-   --strt-conc-values 34.0,35.0 \
-   --right-bc-kind ghb_head \
-   --max-runs 200 \
+   --max-runs-per-scenario 200 \
    --save-timeseries
 ```
 
 This generates:
-- `data_configurable/<sample_id>/sample.npz` - FNO-ready sample with input/output tensors and metadata
-- `data_configurable/manifest.json` - run metadata, failure logs, and train/val/test split IDs
+- `data_windowed/scenario_<beta>_<diffc>/run_<...>/windows.npz` - windowed input/output tensors for each run
+- `data_windowed/manifest.json` - scenario/run metadata, failure logs, and global train/val/test window splits
 
 ### 2. Create Animation
 
@@ -116,12 +115,12 @@ Freshwater Inflow →             Ocean/Seawater (Hydrostatic)
 **Flow (GWF):**
 - Left boundary: Specified flux (`WEL` package) total inflow = 5.7024 m³/d
 - Right boundary: Hydrostatic mixed boundary (`GHB` package)
-- Initial: Head = 35.0 everywhere
+- Initial: Direct solver default head = 1.0 m
 
 **Transport (GWT):**
 - Left boundary (`WEL`): Concentration = 0.0 g/L (freshwater injection)
 - Right boundary (`GHB`): Concentration = 35.0 g/L for water entering the domain
-- Initial: Concentration = 35.0 g/L everywhere (domain is initially filled with seawater)
+- Initial: Direct solver default concentration = 35.0 g/L
 
 ## 📊 Equations Solved
 
@@ -168,23 +167,32 @@ Solves for salt concentration **C** using UPSTREAM scheme for advection.
    - Active variable-density coupling is enabled natively in MODFLOW 6 via the `BUY` (Buoyancy) package. The transport model maps seawater concentration back to hydraulic density driving the wedge.
 
 2. **Coupling control for experiments**
-   - Use `--beta-c-values` to dial coupling strength across the dataset.
-   - Include `0.0` in `--beta-c-values` for an uncoupled baseline.
+   - Define scenarios with explicit `--scenario-pairs` values in `beta_c:diffc` format.
+   - Example: `--scenario-pairs 0.0:0.57024,0.7:0.57024,1.2:0.28512`.
 
    - If MODFLOW 6 is not on PATH, pass `--mf6-exe ./.venv/bin/mf6`.
 
-3. **Sharp front challenge controls**
-   - Use `--diffc-values`, `--al-values`, and `--at-values` to change mixing-front sharpness.
+3. **Within-scenario parameter variation**
+   - Vary `--hk-values`, `--por-values`, `--inflow-values`, and `--ghb-head-values` within each scenario.
+    - Initialization follows best practice by default:
+       - Warm-start each run from the previous successful run in the same scenario (`--warm-start`).
+       - If warm-start is unavailable, use explicit separate constants:
+          - Head: `1.0`
+          - Concentration: `35.0`
+   - `vk` tracks `hk` for each run.
+
+4. **Sharp front challenge controls**
+   - Use scenario `diffc` values and run-level `--al-values`, `--at-values` to change front sharpness.
    - Lower `diffc` and smaller dispersivities generally produce sharper fronts.
 
-4. **Nonlinear density law caveat**
+5. **Nonlinear density law caveat**
    - Current setup uses MODFLOW 6 `BUY`, which is linear in concentration.
    - Exponential density coupling is not natively available in this workflow and should be treated as a separate phase.
 
-5. **File sizes**: Saving all 500 time steps creates ~13 MB files
+6. **File sizes**: Saving all 500 time steps creates ~13 MB files
    - To save only final state, change `saverecord=[("HEAD", "LAST")]` in `run_henry.py`
 
-6. **Animation performance**: Use `--skip` option to reduce rendering time
+7. **Animation performance**: Use `--skip` option to reduce rendering time
    - `--skip 5`: renders every 5th time step (100 frames instead of 500)
    - `--skip 10`: renders every 10th time step (50 frames)
 
@@ -209,11 +217,13 @@ out/
 Dataset outputs:
 
 ```
-data_configurable/
-├── sample_000001_beta0.000_diffc0.57024_in2.8510/
-│   ├── gwf.hds
-│   ├── gwt.ucn
-│   └── sample.npz
+data_windowed/
+├── scenario_beta0.000_diffc0.57024/
+│   ├── run_000001_hk864.00_por0.350_in2.8510_ghb1.0000/
+│   │   ├── gwf.hds
+│   │   ├── gwt.ucn
+│   │   └── windows.npz
+│   └── scenario_manifest.json
 ├── ...
 └── manifest.json
 ```

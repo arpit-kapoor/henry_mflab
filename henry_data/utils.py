@@ -75,3 +75,29 @@ def build_splits(ids, train_frac, val_frac, seed):
 
 def parse_float_csv(values):
     return [float(v.strip()) for v in values.split(",") if v.strip()]
+
+
+def parse_scenario_pairs(values):
+    pairs = []
+    for raw_pair in values.split(","):
+        pair = raw_pair.strip()
+        if not pair:
+            continue
+        if ":" not in pair:
+            raise ValueError(
+                "scenario pairs must be comma-separated 'beta:diffc' values, "
+                f"got '{pair}'"
+            )
+        beta_str, diffc_str = pair.split(":", 1)
+        pairs.append((float(beta_str.strip()), float(diffc_str.strip())))
+    if not pairs:
+        raise ValueError("at least one scenario pair is required")
+    return pairs
+
+
+def valid_window_indices(n_times, lag):
+    if lag <= 0:
+        raise ValueError(f"lag must be >= 1, got {lag}")
+    if n_times <= lag:
+        return np.empty((0,), dtype=int)
+    return np.arange(0, n_times - lag, dtype=int)

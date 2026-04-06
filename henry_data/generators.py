@@ -4,207 +4,342 @@ import json
 import numpy as np
 
 from .simulation import build_and_run_henry
-from .utils import build_fno_io_tensors, build_splits
+from .utils import build_splits, valid_window_indices
 
 
-def _sample_tag(i, params):
+STANDARD_INIT_HEAD = 1.0
+STANDARD_INIT_CONCENTRATION = 35.0
+
+
+def _scenario_tag(beta_c, diffc):
+    return f"scenario_beta{beta_c:.3f}_diffc{diffc:.5f}"
+
+
+def _run_tag(run_index, params):
     return (
-        f"sample_{i:06d}_"
-        f"beta{params['beta_c']:.3f}_"
-        f"diffc{params['diffc']:.5f}_"
-        f"in{params['inflow']:.4f}"
+        f"run_{run_index:06d}_"
+        f"hk{params['hk']:.2f}_"
+        f"por{params['por']:.3f}_"
+        f"in{params['inflow']:.4f}_"
+        f"ghb{params['ghb_head']:.4f}"
     )
 
 
-def generate_configurable_dataset(
+def _broadcast_channel(value, nlay, ncol):
+    return np.full((nlay, ncol), float(value), dtype=float)
+
+
+def _initial_head_field(nlay, ncol):
+    # Keep head and concentration ICs explicit and separate for clarity.
+    return np.full((nlay, ncol), float(STANDARD_INIT_HEAD), dtype=float)
+
+
+def _initial_concentration_field(nlay, ncol):
+    return np.full((nlay, ncol), float(STANDARD_INIT_CONCENTRATION), dtype=float)
+
+
+def _build_window_tensors(head_ts, conc_ts, lag, nlay, ncol, params):
+    t_indices = valid_window_indices(head_ts.shape[0], lag)
+    n_windows = int(t_indices.size)
+    if n_windows == 0:
+        return None
+
+    cin = 8
+    input_tensor = np.empty((n_windows, cin, nlay, ncol), dtype=np.float32)
+    output_tensor = np.empty((n_windows, 2, nlay, ncol), dtype=np.float32)
+
+    hk_field = _broadcast_channel(params["hk"], nlay, ncol)
+    por_field = _broadcast_channel(params["por"], nlay, ncol)
+    inflow_field = _broadcast_channel(params["inflow"], nlay, ncol)
+    ghb_field = _broadcast_channel(params["ghb_head"], nlay, ncol)
+    beta_field = _broadcast_channel(params["beta_c"], nlay, ncol)
+    diffc_field = _broadcast_channel(params["diffc"], nlay, ncol)
+
+    for i, t in enumerate(t_indices):
+        t_lag = t + lag
+        input_tensor[i, 0] = conc_ts[t]
+        input_tensor[i, 1] = head_ts[t]
+        input_tensor[i, 2] = hk_field
+        input_tensor[i, 3] = por_field
+        input_tensor[i, 4] = inflow_field
+        input_tensor[i, 5] = ghb_field
+        input_tensor[i, 6] = beta_field
+        input_tensor[i, 7] = diffc_field
+
+        output_tensor[i, 0] = conc_ts[t_lag]
+        output_tensor[i, 1] = head_ts[t_lag]
+
+    return {
+        "input_tensor": input_tensor,
+        "output_tensor": output_tensor,
+        "t_index": t_indices,
+        "t_lag_index": t_indices + lag,
+    }
+
+
+def generate_windowed_scenario_dataset(
     outdir,
-    beta_c_values,
-    diffc_values,
+    scenario_pairs,
     al_values,
     at_values,
+    hk_values,
+    por_values,
     inflow_values,
     ghb_head_values,
-    cinlet_values,
-    strt_head_values,
-    strt_conc_values,
+    cinlet,
     ncol,
     nlay,
     total_time,
     nstp,
-    por,
-    hk,
-    vk,
     hk_field,
     vk_field,
     exe_name,
     overwrite,
-    max_runs,
+    max_runs_per_scenario,
+    lag,
     save_timeseries,
-    right_bc_kind,
+    warm_start,
     seed,
     train_frac,
     val_frac,
 ):
     outdir.mkdir(parents=True, exist_ok=True)
 
-    combinations = list(
-        itertools.product(
-            beta_c_values,
-            diffc_values,
-            al_values,
-            at_values,
-            inflow_values,
-            ghb_head_values,
-            cinlet_values,
-            strt_head_values,
-            strt_conc_values,
+    if hk_field is not None and len(hk_values) != 1:
+        raise ValueError("hk sweep is incompatible with --kappa-file; provide one hk value")
+    if vk_field is not None and len(hk_values) != 1:
+        raise ValueError("vk from kappa file is incompatible with hk sweep")
+
+    global_window_ids = []
+    scenarios_summary = []
+    run_records = []
+    run_failures = []
+
+    for scenario_index, (beta_c, diffc) in enumerate(scenario_pairs, start=1):
+        scenario_tag = _scenario_tag(beta_c, diffc)
+        scenario_dir = outdir / scenario_tag
+        scenario_dir.mkdir(parents=True, exist_ok=True)
+
+        run_combinations = list(
+            itertools.product(hk_values, por_values, inflow_values, ghb_head_values, al_values, at_values)
         )
-    )
-    if max_runs is not None:
-        combinations = combinations[:max_runs]
+        if max_runs_per_scenario is not None:
+            run_combinations = run_combinations[:max_runs_per_scenario]
 
-    runs = []
-    failures = []
+        scenario_runs = []
+        scenario_failures = []
+        prev_head_final = None
+        prev_conc_final = None
 
-    print(f"Dataset size: {len(combinations)} runs")
-    for idx, combo in enumerate(combinations, start=1):
-        (
-            beta_c,
-            diffc,
-            al,
-            at,
-            inflow,
-            ghb_head,
-            cinlet,
-            strt_head,
-            strt_conc,
-        ) = combo
+        print(
+            f"Scenario [{scenario_index:03d}/{len(scenario_pairs):03d}] {scenario_tag} "
+            f"with {len(run_combinations)} runs"
+        )
 
-        params = {
-            "beta_c": float(beta_c),
-            "diffc": float(diffc),
-            "al": float(al),
-            "at": float(at),
-            "inflow": float(inflow),
-            "ghb_head": float(ghb_head),
-            "cinlet": float(cinlet),
-            "strt_head": float(strt_head),
-            "strt_conc": float(strt_conc),
-        }
+        for run_index, combo in enumerate(run_combinations, start=1):
+            hk, por, inflow, ghb_head, al, at = combo
 
-        tag = _sample_tag(idx, params)
-        run_ws = outdir / tag
-        run_ws.mkdir(parents=True, exist_ok=True)
-        sample_file = run_ws / "sample.npz"
+            if warm_start and prev_head_final is not None and prev_conc_final is not None:
+                strt_head = prev_head_final
+                strt_conc = prev_conc_final
+                init_mode = "warm_start_previous_run"
+            else:
+                strt_head = _initial_head_field(nlay=nlay, ncol=ncol)
+                strt_conc = _initial_concentration_field(nlay=nlay, ncol=ncol)
+                init_mode = "separate_constant_ic"
 
-        if sample_file.exists() and not overwrite:
-            runs.append(
-                {
-                    "id": tag,
-                    "workspace": str(run_ws),
+            params = {
+                "beta_c": float(beta_c),
+                "diffc": float(diffc),
+                "hk": float(hk),
+                "por": float(por),
+                "inflow": float(inflow),
+                "ghb_head": float(ghb_head),
+                "al": float(al),
+                "at": float(at),
+                "cinlet": float(cinlet),
+                "init_mode": init_mode,
+                "initial_head": float(STANDARD_INIT_HEAD),
+                "initial_concentration": float(STANDARD_INIT_CONCENTRATION),
+            }
+
+            run_tag = _run_tag(run_index, params)
+            run_dir = scenario_dir / run_tag
+            run_dir.mkdir(parents=True, exist_ok=True)
+            sample_file = run_dir / "windows.npz"
+
+            if sample_file.exists() and not overwrite:
+                record = {
+                    "id": f"{scenario_tag}/{run_tag}",
+                    "scenario": scenario_tag,
+                    "run": run_tag,
+                    "workspace": str(run_dir),
                     "status": "skipped",
                     **params,
                 }
-            )
-            continue
+                run_records.append(record)
+                scenario_runs.append(record)
+                continue
 
-        print(f"[{idx:04d}/{len(combinations):04d}] RUN  {tag}")
-        try:
-            head_ts, conc_ts, times = build_and_run_henry(
-                workspace=run_ws,
-                ncol=ncol,
-                nlay=nlay,
-                total_time=total_time,
-                nstp=nstp,
-                cinlet=params["cinlet"],
-                por=por,
-                hk=hk,
-                vk=vk,
-                al=params["al"],
-                at=params["at"],
-                diffc=params["diffc"],
-                inflow=params["inflow"],
-                ghb_head=params["ghb_head"],
-                beta_c=params["beta_c"],
-                strt_head=params["strt_head"],
-                strt_conc=params["strt_conc"],
-                hk_field=hk_field,
-                vk_field=vk_field,
-                return_timeseries=True,
-                exe_name=exe_name,
-            )
+            print(f"  [{run_index:04d}/{len(run_combinations):04d}] RUN  {run_tag}")
+            try:
+                head_ts, conc_ts, times = build_and_run_henry(
+                    workspace=run_dir,
+                    ncol=ncol,
+                    nlay=nlay,
+                    total_time=total_time,
+                    nstp=nstp,
+                    cinlet=params["cinlet"],
+                    por=params["por"],
+                    hk=params["hk"],
+                    vk=params["hk"],
+                    al=params["al"],
+                    at=params["at"],
+                    diffc=params["diffc"],
+                    inflow=params["inflow"],
+                    ghb_head=params["ghb_head"],
+                    beta_c=params["beta_c"],
+                    strt_head=strt_head,
+                    strt_conc=strt_conc,
+                    hk_field=hk_field,
+                    vk_field=vk_field,
+                    return_timeseries=True,
+                    exe_name=exe_name,
+                )
 
-            right_bc_scalar = params["ghb_head"] if right_bc_kind == "ghb_head" else params["cinlet"]
-            input_tensor, output_tensor = build_fno_io_tensors(
-                nlay=nlay,
-                ncol=ncol,
-                strt_head=params["strt_head"],
-                strt_conc=params["strt_conc"],
-                inflow=params["inflow"],
-                right_bc_scalar=right_bc_scalar,
-                conc_final=conc_ts[-1],
-                head_final=head_ts[-1],
-            )
+                prev_head_final = np.asarray(head_ts[-1], dtype=float).copy()
+                prev_conc_final = np.asarray(conc_ts[-1], dtype=float).copy()
 
-            payload = {
-                "input_tensor": input_tensor,
-                "output_tensor": output_tensor,
-                "head_final": head_ts[-1],
-                "conc_final": conc_ts[-1],
-                "times": times,
-                "right_bc_kind": right_bc_kind,
-                "right_bc_scalar": right_bc_scalar,
-                "ncol": ncol,
-                "nlay": nlay,
-                "total_time": total_time,
-                "nstp": nstp,
-                "por": por,
-                "hk": hk,
-                "vk": vk,
-                **params,
-            }
-            if save_timeseries:
-                payload["head_timeseries"] = head_ts
-                payload["conc_timeseries"] = conc_ts
+                windowed = _build_window_tensors(
+                    head_ts=head_ts,
+                    conc_ts=conc_ts,
+                    lag=lag,
+                    nlay=nlay,
+                    ncol=ncol,
+                    params=params,
+                )
+                if windowed is None:
+                    raise ValueError(
+                        f"no valid windows for lag={lag}; available times={head_ts.shape[0]}"
+                    )
 
-            np.savez_compressed(sample_file, **payload)
-            runs.append(
-                {
-                    "id": tag,
-                    "workspace": str(run_ws),
-                    "status": "ok",
-                    "shape": [int(head_ts.shape[1]), int(head_ts.shape[2])],
-                    "ntimes": int(head_ts.shape[0]),
+                window_ids = [
+                    f"{scenario_tag}/{run_tag}/w{int(t):05d}"
+                    for t in windowed["t_index"].tolist()
+                ]
+                global_window_ids.extend(window_ids)
+
+                payload = {
+                    "input_tensor": windowed["input_tensor"],
+                    "output_tensor": windowed["output_tensor"],
+                    "t_index": windowed["t_index"],
+                    "t_lag_index": windowed["t_lag_index"],
+                    "time_t": times[windowed["t_index"]],
+                    "time_t_lag": times[windowed["t_lag_index"]],
+                    "window_ids": np.asarray(window_ids),
+                    "lag": int(lag),
+                    "ncol": ncol,
+                    "nlay": nlay,
+                    "total_time": total_time,
+                    "nstp": nstp,
                     **params,
                 }
-            )
-        except Exception as exc:
-            failures.append(
-                {
-                    "id": tag,
-                    "workspace": str(run_ws),
+                if save_timeseries:
+                    payload["head_timeseries"] = head_ts
+                    payload["conc_timeseries"] = conc_ts
+                    payload["times"] = times
+
+                np.savez_compressed(sample_file, **payload)
+
+                record = {
+                    "id": f"{scenario_tag}/{run_tag}",
+                    "scenario": scenario_tag,
+                    "run": run_tag,
+                    "workspace": str(run_dir),
+                    "status": "ok",
+                    "n_windows": int(windowed["input_tensor"].shape[0]),
+                    "input_shape": [
+                        int(windowed["input_tensor"].shape[1]),
+                        int(windowed["input_tensor"].shape[2]),
+                        int(windowed["input_tensor"].shape[3]),
+                    ],
+                    "output_shape": [
+                        int(windowed["output_tensor"].shape[1]),
+                        int(windowed["output_tensor"].shape[2]),
+                        int(windowed["output_tensor"].shape[3]),
+                    ],
+                    **params,
+                }
+                run_records.append(record)
+                scenario_runs.append(record)
+            except Exception as exc:
+                failure = {
+                    "id": f"{scenario_tag}/{run_tag}",
+                    "scenario": scenario_tag,
+                    "run": run_tag,
+                    "workspace": str(run_dir),
                     "status": "failed",
                     "error": str(exc),
                     **params,
                 }
-            )
-            print(f"  FAILED: {exc}")
+                run_failures.append(failure)
+                scenario_failures.append(failure)
+                print(f"    FAILED: {exc}")
 
-    ok_ids = [r["id"] for r in runs if r["status"] == "ok"]
-    splits = build_splits(ok_ids, train_frac, val_frac, seed) if ok_ids else {"train": [], "val": [], "test": []}
+        scenario_manifest = {
+            "scenario": scenario_tag,
+            "beta_c": float(beta_c),
+            "diffc": float(diffc),
+            "lag": int(lag),
+            "n_total_runs": len(run_combinations),
+            "n_ok_runs": sum(r["status"] == "ok" for r in scenario_runs),
+            "n_skipped_runs": sum(r["status"] == "skipped" for r in scenario_runs),
+            "n_failed_runs": len(scenario_failures),
+            "runs": scenario_runs,
+            "failures": scenario_failures,
+        }
+        with (scenario_dir / "scenario_manifest.json").open("w", encoding="utf-8") as fp:
+            json.dump(scenario_manifest, fp, indent=2)
+
+        scenarios_summary.append(
+            {
+                "scenario": scenario_tag,
+                "beta_c": float(beta_c),
+                "diffc": float(diffc),
+                "n_total_runs": len(run_combinations),
+                "n_ok_runs": scenario_manifest["n_ok_runs"],
+                "n_skipped_runs": scenario_manifest["n_skipped_runs"],
+                "n_failed_runs": scenario_manifest["n_failed_runs"],
+            }
+        )
+
+    splits = (
+        build_splits(global_window_ids, train_frac, val_frac, seed)
+        if global_window_ids
+        else {"train": [], "val": [], "test": []}
+    )
 
     manifest = {
-        "workflow": "configurable_dataset",
-        "n_total": len(combinations),
-        "n_ok": sum(r["status"] == "ok" for r in runs),
-        "n_skipped": sum(r["status"] == "skipped" for r in runs),
-        "n_failed": len(failures),
-        "right_bc_kind": right_bc_kind,
+        "workflow": "windowed_scenario_dataset",
+        "initialization": {
+            "warm_start": bool(warm_start),
+            "fallback_head": float(STANDARD_INIT_HEAD),
+            "fallback_concentration": float(STANDARD_INIT_CONCENTRATION),
+            "notes": "GWF and GWT initial conditions use separate explicit constants.",
+        },
+        "lag": int(lag),
         "train_frac": train_frac,
         "val_frac": val_frac,
+        "n_scenarios": len(scenario_pairs),
+        "n_total_runs": sum(s["n_total_runs"] for s in scenarios_summary),
+        "n_ok_runs": sum(s["n_ok_runs"] for s in scenarios_summary),
+        "n_skipped_runs": sum(s["n_skipped_runs"] for s in scenarios_summary),
+        "n_failed_runs": sum(s["n_failed_runs"] for s in scenarios_summary),
+        "n_total_windows": len(global_window_ids),
+        "scenarios": scenarios_summary,
         "splits": splits,
-        "runs": runs,
-        "failures": failures,
+        "runs": run_records,
+        "failures": run_failures,
     }
 
     with (outdir / "manifest.json").open("w", encoding="utf-8") as fp:
@@ -212,6 +347,9 @@ def generate_configurable_dataset(
 
     print(
         "Generation done: "
-        f"ok={manifest['n_ok']} skipped={manifest['n_skipped']} failed={manifest['n_failed']}"
+        f"scenarios={manifest['n_scenarios']} "
+        f"runs_ok={manifest['n_ok_runs']} "
+        f"runs_failed={manifest['n_failed_runs']} "
+        f"windows={manifest['n_total_windows']}"
     )
     print(f"Manifest: {outdir / 'manifest.json'}")

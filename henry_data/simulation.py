@@ -24,7 +24,7 @@ def build_and_run_henry(
     inflow=2.851,
     ghb_head=None,
     beta_c=0.7,
-    strt_head=35.0,
+    strt_head=1.0,
     strt_conc=35.0,
     hk_field=None,
     vk_field=None,
