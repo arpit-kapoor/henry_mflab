@@ -5,6 +5,7 @@ Creates a video showing the evolution of hydraulic head and salt concentration.
 """
 import argparse
 import pathlib as pl
+import re
 
 import flopy.utils
 import matplotlib.pyplot as plt
@@ -12,30 +13,119 @@ import matplotlib.animation as animation
 import numpy as np
 
 
+DEFAULT_DATASET_ROOT = pl.Path(
+    "/Users/akap5486/Projects/groundwater/data/henry_data/one_coupling_scenario"
+)
+
+
+def _slugify(name: str) -> str:
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", name).strip("_")
+
+
+def _find_run_dirs(path: pl.Path):
+    """Return run directories that contain both gwf.hds and gwt.ucn."""
+    if (path / "gwf.hds").exists() and (path / "gwt.ucn").exists():
+        return [path]
+
+    run_dirs = []
+    for run_dir in sorted(path.glob("scenario_*/run_*")):
+        if (run_dir / "gwf.hds").exists() and (run_dir / "gwt.ucn").exists():
+            run_dirs.append(run_dir)
+    for run_dir in sorted(path.glob("run_*")):
+        if (run_dir / "gwf.hds").exists() and (run_dir / "gwt.ucn").exists():
+            run_dirs.append(run_dir)
+    return run_dirs
+
+
+def _resolve_run_workspace(dataset_path: pl.Path, run_path: str | None):
+    if run_path is not None:
+        run_workspace = pl.Path(run_path)
+        if not ((run_workspace / "gwf.hds").exists() and (run_workspace / "gwt.ucn").exists()):
+            raise FileNotFoundError(
+                "run_path must point to a run workspace containing gwf.hds and gwt.ucn: "
+                f"{run_workspace}"
+            )
+        return run_workspace, _find_run_dirs(dataset_path)
+
+    run_dirs = _find_run_dirs(dataset_path)
+    if not run_dirs:
+        raise FileNotFoundError(
+            "No run workspace found with gwf.hds and gwt.ucn under "
+            f"{dataset_path}"
+        )
+    if len(run_dirs) > 1:
+        raise ValueError(
+            "Multiple run workspaces found. Pass --run-path to select one explicitly. "
+            f"Found {len(run_dirs)} runs under {dataset_path}"
+        )
+    return run_dirs[0], run_dirs
+
+
+def _default_output_path(dataset_path: pl.Path, run_workspace: pl.Path):
+    # Save output in the dataset root path, not inside the run workspace.
+    if dataset_path.name.startswith("run_"):
+        base_dir = dataset_path
+    elif dataset_path.name.startswith("scenario_"):
+        base_dir = dataset_path.parent
+    else:
+        base_dir = dataset_path
+
+    scenario_name = run_workspace.parent.name
+    run_name = run_workspace.name
+    out_name = (
+        f"henry_animation_{_slugify(scenario_name)}_{_slugify(run_name)}.mp4"
+    )
+    return base_dir / out_name
+
+
+def _fixed_levels(vmin: float, vmax: float, n_levels: int = 21):
+    """Build stable contour levels for the full animation."""
+    if np.isclose(vmin, vmax):
+        eps = max(1e-6, abs(vmin) * 1e-6)
+        return np.linspace(vmin - eps, vmax + eps, n_levels)
+    return np.linspace(vmin, vmax, n_levels)
+
+
 def animate_henry(
-    workspace,
-    output_video="henry_animation.mp4",
+    dataset_path,
+    output_video=None,
     fps=20,
     dpi=150,
     skip_frames=1,
+    run_path=None,
 ):
     """
     Create animation of Henry problem results.
     
     Parameters
     ----------
-    workspace : str or Path
-        Directory containing MODFLOW output files
-    output_video : str
-        Output video filename
+    dataset_path : str or Path
+        Run workspace or dataset root containing scenario/run workspaces
+    output_video : str or None
+        Output video filename/path. If None, auto-generated in dataset root path.
     fps : int
         Frames per second in video
     dpi : int
         Resolution (dots per inch)
     skip_frames : int
         Only plot every Nth time step (for faster rendering)
+    run_path : str or None
+        Explicit path to the run workspace containing gwf.hds and gwt.ucn
     """
-    ws = pl.Path(workspace)
+    ds = pl.Path(dataset_path)
+    ws, run_dirs = _resolve_run_workspace(ds, run_path)
+
+    print(f"Dataset path: {ds}")
+    print(f"Selected run workspace: {ws}")
+    if len(run_dirs) > 1 and run_path is not None:
+        print(f"Available run workspaces under dataset path: {len(run_dirs)}")
+
+    if output_video is None:
+        output_path = _default_output_path(ds, ws)
+    else:
+        out = pl.Path(output_video)
+        output_path = out if out.is_absolute() else ds / out
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     
     print(f"Reading data from: {ws}")
     
@@ -75,17 +165,18 @@ def animate_henry(
     # Pre-compute color limits for consistent scaling, ignoring dummy values (e.g. 1e30)
     head_valid = head_data[head_data < 1e20]
     head_vmin, head_vmax = head_valid.min(), head_valid.max()
+    head_levels = _fixed_levels(head_vmin, head_vmax)
     
     conc_valid = conc_data[conc_data < 1e20]
     conc_vmin, conc_vmax = conc_valid.min(), conc_valid.max()
+    conc_levels = _fixed_levels(conc_vmin, conc_vmax)
     
     # Initialize plots
     ax_head, ax_conc = axes
     
     # Head subplot - masking dummy values
     head_plot0 = np.where(head_data[0] < 1e20, head_data[0], np.nan)
-    im_head = ax_head.contourf(X, Z, head_plot0, levels=20, cmap='Blues', 
-                               vmin=head_vmin, vmax=head_vmax)
+    im_head = ax_head.contourf(X, Z, head_plot0, levels=head_levels, cmap='Blues')
     ax_head.set_xlabel('Distance (m)', fontsize=11)
     ax_head.set_ylabel('Elevation (m)', fontsize=11)
     ax_head.set_title('Hydraulic Head (m)', fontsize=12)
@@ -94,8 +185,7 @@ def animate_henry(
     
     # Concentration subplot - masking dummy values
     conc_plot0 = np.where(conc_data[0] < 1e20, conc_data[0], np.nan)
-    im_conc = ax_conc.contourf(X, Z, conc_plot0, levels=20, cmap='Reds',
-                               vmin=conc_vmin, vmax=conc_vmax)
+    im_conc = ax_conc.contourf(X, Z, conc_plot0, levels=conc_levels, cmap='Reds')
     ax_conc.set_xlabel('Distance (m)', fontsize=11)
     ax_conc.set_ylabel('Elevation (m)', fontsize=11)
     ax_conc.set_title('Concentration (kg/m³)', fontsize=12)
@@ -122,10 +212,8 @@ def animate_henry(
         head_plot = np.where(head_data[idx] < 1e20, head_data[idx], np.nan)
         conc_plot = np.where(conc_data[idx] < 1e20, conc_data[idx], np.nan)
         
-        ax_head.contourf(X, Z, head_plot, levels=20, cmap='Blues',
-                        vmin=head_vmin, vmax=head_vmax)
-        ax_conc.contourf(X, Z, conc_plot, levels=20, cmap='Reds',
-                        vmin=conc_vmin, vmax=conc_vmax)
+        ax_head.contourf(X, Z, head_plot, levels=head_levels, cmap='Blues')
+        ax_conc.contourf(X, Z, conc_plot, levels=conc_levels, cmap='Reds')
         
         # Update time text
         time_text.set_text(f'Time: {times[idx]:.4f} days (Step {idx+1}/{ntimes})')
@@ -143,7 +231,6 @@ def animate_henry(
     )
     
     # Save animation - try different writers in order of preference
-    output_path = ws / output_video
     print(f"Saving animation to: {output_path}")
     print(f"  Resolution: {dpi} DPI")
     print(f"  Frame rate: {fps} FPS")
@@ -190,16 +277,31 @@ def main():
         description="Animate Henry problem head and concentration fields"
     )
     parser.add_argument(
-        "--workspace", 
+        "--dataset-path", 
         type=str, 
-        default="./out",
-        help="Directory containing MODFLOW output files (default: ./out)"
+        default=str(DEFAULT_DATASET_ROOT),
+        help=(
+            "Run workspace path or dataset root path containing scenario/run folders "
+            f"(default: {DEFAULT_DATASET_ROOT})"
+        )
+    )
+    parser.add_argument(
+        "--run-path",
+        type=str,
+        default=None,
+        help=(
+            "Explicit run workspace path containing gwf.hds and gwt.ucn. "
+            "Recommended when --dataset-path contains multiple runs."
+        )
     )
     parser.add_argument(
         "--output", 
         type=str, 
-        default="henry_animation.mp4",
-        help="Output video filename (default: henry_animation.mp4)"
+        default=None,
+        help=(
+            "Output video path. If relative, resolved under --dataset-path. "
+            "If omitted, auto-generated in the dataset root path."
+        )
     )
     parser.add_argument(
         "--fps", 
@@ -223,11 +325,12 @@ def main():
     args = parser.parse_args()
     
     animate_henry(
-        workspace=args.workspace,
+        dataset_path=args.dataset_path,
         output_video=args.output,
         fps=args.fps,
         dpi=args.dpi,
         skip_frames=args.skip,
+        run_path=args.run_path,
     )
 
 

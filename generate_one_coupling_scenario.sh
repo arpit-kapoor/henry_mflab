@@ -10,31 +10,53 @@ set -euo pipefail
 # Example:
 #   ./generate_one_coupling_scenario.sh ./data_beta07_diff057 0.7 0.57024 1
 
-OUTDIR="${1:-./data_one_scenario}"
-BETA_C="${2:-0.7}"
-DIFFC="${3:-0.57024}"
+OUTDIR="${1:-/Users/akap5486/Projects/groundwater/data/henry_data/one_coupling_scenario}"
+BETA_C="${2:-0.20}"
+DIFFC="${3:-0.0014}"
 LAG="${4:-1}"
 
 # Optional run-variation dimensions (comma-separated lists).
-# Keep these as single values for the smallest dataset.
-HK_VALUES="${HK_VALUES:-864.0}"
-POR_VALUES="${POR_VALUES:-0.35}"
-INFLOW_VALUES="${INFLOW_VALUES:-2.851}"
-GHB_HEAD_VALUES="${GHB_HEAD_VALUES:-1.0}"
-AL_VALUES="${AL_VALUES:-0.0}"
-AT_VALUES="${AT_VALUES:-0.0}"
+# Defaults are centered on the MODFLOW 6 Henry benchmark definition.
+HK_VALUES="${HK_VALUES:-664.0,700.0,864.0,1000.0}"
+POR_VALUES="${POR_VALUES:-0.25,0.30,0.35,0.40,0.45}"
+INFLOW_VALUES="${INFLOW_VALUES:-1.426,2.851,4.2765,5.7024}"
+GHB_HEAD_VALUES="${GHB_HEAD_VALUES:-0.90,0.98,1.00,1.02,1.10}"
+AL_VALUES="${AL_VALUES:-0.0,0.01}"
+AT_VALUES="${AT_VALUES:-0.0,0.005}"
 CINLET="${CINLET:-35.0}"
+
+# Grid/time controls
+NCOL="${NCOL:-80}"
+NLAY="${NLAY:-40}"
+TOTAL_TIME="${TOTAL_TIME:-0.5}"
+NSTP="${NSTP:-100}"
+
+# Dataset split controls
+SEED="${SEED:-42}"
+TRAIN_FRAC="${TRAIN_FRAC:-0.7}"
+VAL_FRAC="${VAL_FRAC:-0.15}"
 
 # Runtime controls
 MF6_EXE="${MF6_EXE:-./.venv/bin/mf6}"
 MAX_RUNS_PER_SCENARIO="${MAX_RUNS_PER_SCENARIO:-}"
 SAVE_TIMESERIES="${SAVE_TIMESERIES:-0}"
-OVERWRITE="${OVERWRITE:-0}"
+OVERWRITE="${OVERWRITE:-1}"
+WARM_START="${WARM_START:-1}"
 SCENARIO_PAIRS="${BETA_C}:${DIFFC}"
+
+# Animation controls (post-generation)
+GENERATE_ANIMATION="${GENERATE_ANIMATION:-0}"
+ANIMATE_FPS="${ANIMATE_FPS:-20}"
+ANIMATE_DPI="${ANIMATE_DPI:-150}"
+ANIMATE_SKIP="${ANIMATE_SKIP:-1}"
 
 CMD=(
   uv run python run_henry.py
   --outdir "$OUTDIR"
+  --ncol "$NCOL"
+  --nlay "$NLAY"
+  --total-time "$TOTAL_TIME"
+  --nstp "$NSTP"
   --mf6-exe "$MF6_EXE"
   --scenario-pairs "$SCENARIO_PAIRS"
   --lag "$LAG"
@@ -45,6 +67,9 @@ CMD=(
   --inflow-values "$INFLOW_VALUES"
   --ghb-head-values "$GHB_HEAD_VALUES"
   --cinlet "$CINLET"
+  --seed "$SEED"
+  --train-frac "$TRAIN_FRAC"
+  --val-frac "$VAL_FRAC"
 )
 
 if [[ -n "$MAX_RUNS_PER_SCENARIO" ]]; then
@@ -59,15 +84,78 @@ if [[ "$OVERWRITE" == "1" ]]; then
   CMD+=(--overwrite)
 fi
 
+if [[ "$WARM_START" == "1" ]]; then
+  CMD+=(--warm-start)
+else
+  CMD+=(--no-warm-start)
+fi
+
 echo "Running one coupling scenario dataset generation"
 echo "  outdir:    $OUTDIR"
 echo "  beta_c:    $BETA_C"
 echo "  diffc:     $DIFFC"
 echo "  lag:       $LAG"
+echo "  grid:      nlay=$NLAY ncol=$NCOL"
+echo "  time:      total_time=$TOTAL_TIME nstp=$NSTP"
+echo "  split:     seed=$SEED train=$TRAIN_FRAC val=$VAL_FRAC"
+echo "  warm_start:$WARM_START"
 echo "  mf6 exe:   $MF6_EXE"
+echo "  animate:   $GENERATE_ANIMATION"
 echo "  command:   ${CMD[*]}"
 
 "${CMD[@]}"
+
+if [[ "$GENERATE_ANIMATION" == "1" ]]; then
+  RUN_WORKSPACE="$(uv run python - "$OUTDIR" "$BETA_C" "$DIFFC" <<'PY'
+import json
+import pathlib as pl
+import sys
+
+outdir = pl.Path(sys.argv[1])
+beta = float(sys.argv[2])
+diffc = float(sys.argv[3])
+manifest_path = outdir / "manifest.json"
+
+if not manifest_path.exists():
+    raise SystemExit(f"manifest not found: {manifest_path}")
+
+with manifest_path.open("r", encoding="utf-8") as fp:
+    manifest = json.load(fp)
+
+def close(a: float, b: float, tol: float = 1e-12) -> bool:
+    return abs(a - b) <= tol
+
+candidates = [
+    r for r in manifest.get("runs", [])
+    if close(float(r.get("beta_c", float("nan"))), beta)
+    and close(float(r.get("diffc", float("nan"))), diffc)
+    and r.get("status") in {"ok", "skipped"}
+]
+
+if not candidates:
+    raise SystemExit(
+        f"No run workspace found for beta_c={beta}, diffc={diffc} in {manifest_path}"
+    )
+
+print(candidates[-1]["workspace"])
+PY
+)"
+
+  ANIMATE_CMD=(
+    uv run python animate_henry.py
+    --dataset-path "$OUTDIR"
+    --run-path "$RUN_WORKSPACE"
+    --fps "$ANIMATE_FPS"
+    --dpi "$ANIMATE_DPI"
+    --skip "$ANIMATE_SKIP"
+  )
+
+  echo
+  echo "Generating animation from saved outputs"
+  echo "  run path:  $RUN_WORKSPACE"
+  echo "  command:   ${ANIMATE_CMD[*]}"
+  "${ANIMATE_CMD[@]}"
+fi
 
 echo
 echo "Done. See manifest: $OUTDIR/manifest.json"

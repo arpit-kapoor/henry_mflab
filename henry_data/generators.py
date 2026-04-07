@@ -9,6 +9,39 @@ from .utils import build_splits, valid_window_indices
 
 STANDARD_INIT_HEAD = 1.0
 STANDARD_INIT_CONCENTRATION = 35.0
+INPUT_CHANNEL_NAMES = (
+    "concentration_t",
+    "head_t",
+    "hk",
+    "porosity",
+    "inflow_left_boundary",
+    "ghb_head_right_boundary",
+    "beta_c",
+    "diffc",
+)
+INPUT_CHANNEL_INDEX = {name: idx for idx, name in enumerate(INPUT_CHANNEL_NAMES)}
+
+
+def _validate_input_channel_config():
+    if len(INPUT_CHANNEL_INDEX) != len(INPUT_CHANNEL_NAMES):
+        raise ValueError("INPUT_CHANNEL_NAMES contains duplicate channel names")
+
+    required = {
+        "concentration_t",
+        "head_t",
+        "hk",
+        "porosity",
+        "inflow_left_boundary",
+        "ghb_head_right_boundary",
+        "beta_c",
+        "diffc",
+    }
+    missing = sorted(required - set(INPUT_CHANNEL_NAMES))
+    if missing:
+        raise ValueError(f"Missing required input channels: {missing}")
+
+
+_validate_input_channel_config()
 
 
 def _scenario_tag(beta_c, diffc):
@@ -29,6 +62,18 @@ def _broadcast_channel(value, nlay, ncol):
     return np.full((nlay, ncol), float(value), dtype=float)
 
 
+def _left_boundary_channel(value, nlay, ncol):
+    field = np.zeros((nlay, ncol), dtype=float)
+    field[:, 0] = float(value)
+    return field
+
+
+def _right_boundary_channel(value, nlay, ncol):
+    field = np.zeros((nlay, ncol), dtype=float)
+    field[:, -1] = float(value)
+    return field
+
+
 def _initial_head_field(nlay, ncol):
     # Keep head and concentration ICs explicit and separate for clarity.
     return np.full((nlay, ncol), float(STANDARD_INIT_HEAD), dtype=float)
@@ -44,27 +89,34 @@ def _build_window_tensors(head_ts, conc_ts, lag, nlay, ncol, params):
     if n_windows == 0:
         return None
 
-    cin = 8
+    cin = len(INPUT_CHANNEL_NAMES)
     input_tensor = np.empty((n_windows, cin, nlay, ncol), dtype=np.float32)
     output_tensor = np.empty((n_windows, 2, nlay, ncol), dtype=np.float32)
 
     hk_field = _broadcast_channel(params["hk"], nlay, ncol)
     por_field = _broadcast_channel(params["por"], nlay, ncol)
-    inflow_field = _broadcast_channel(params["inflow"], nlay, ncol)
-    ghb_field = _broadcast_channel(params["ghb_head"], nlay, ncol)
+    inflow_field = _left_boundary_channel(params["inflow"], nlay, ncol)
+    ghb_field = _right_boundary_channel(params["ghb_head"], nlay, ncol)
     beta_field = _broadcast_channel(params["beta_c"], nlay, ncol)
     diffc_field = _broadcast_channel(params["diffc"], nlay, ncol)
 
+    static_channel_fields = {
+        "hk": hk_field,
+        "porosity": por_field,
+        "inflow_left_boundary": inflow_field,
+        "ghb_head_right_boundary": ghb_field,
+        "beta_c": beta_field,
+        "diffc": diffc_field,
+    }
+
+    # Fill channels that are constant across all windows once to avoid index-order mistakes.
+    for channel_name, field in static_channel_fields.items():
+        input_tensor[:, INPUT_CHANNEL_INDEX[channel_name], :, :] = field
+
     for i, t in enumerate(t_indices):
         t_lag = t + lag
-        input_tensor[i, 0] = conc_ts[t]
-        input_tensor[i, 1] = head_ts[t]
-        input_tensor[i, 2] = hk_field
-        input_tensor[i, 3] = por_field
-        input_tensor[i, 4] = inflow_field
-        input_tensor[i, 5] = ghb_field
-        input_tensor[i, 6] = beta_field
-        input_tensor[i, 7] = diffc_field
+        input_tensor[i, INPUT_CHANNEL_INDEX["concentration_t"]] = conc_ts[t]
+        input_tensor[i, INPUT_CHANNEL_INDEX["head_t"]] = head_ts[t]
 
         output_tensor[i, 0] = conc_ts[t_lag]
         output_tensor[i, 1] = head_ts[t_lag]
@@ -232,6 +284,7 @@ def generate_windowed_scenario_dataset(
                 payload = {
                     "input_tensor": windowed["input_tensor"],
                     "output_tensor": windowed["output_tensor"],
+                    "input_channel_names": np.asarray(INPUT_CHANNEL_NAMES),
                     "t_index": windowed["t_index"],
                     "t_lag_index": windowed["t_lag_index"],
                     "time_t": times[windowed["t_index"]],
