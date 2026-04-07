@@ -95,6 +95,29 @@ def parse_scenario_pairs(values):
     return pairs
 
 
+def build_coupling_diffusion_scenario_pairs(
+    beta_min,
+    beta_max,
+    beta_count,
+    diffc_min,
+    diffc_max,
+    diffc_count,
+    fixed_beta,
+    fixed_diffc,
+):
+    beta_count = int(beta_count)
+    diffc_count = int(diffc_count)
+    if beta_count <= 0 or diffc_count <= 0:
+        raise ValueError("beta_count and diffc_count must be >= 1")
+
+    beta_vals = np.linspace(float(beta_min), float(beta_max), beta_count)
+    diffc_vals = np.linspace(float(diffc_min), float(diffc_max), diffc_count)
+
+    pairs = [(float(beta), float(fixed_diffc)) for beta in beta_vals]
+    pairs.extend((float(fixed_beta), float(diffc)) for diffc in diffc_vals)
+    return pairs
+
+
 def valid_window_indices(n_times, lag):
     if lag <= 0:
         raise ValueError(f"lag must be >= 1, got {lag}")

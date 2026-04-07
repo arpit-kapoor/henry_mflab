@@ -2,7 +2,12 @@ import argparse
 import pathlib as pl
 
 from .generators import generate_windowed_scenario_dataset
-from .utils import load_kappa_fields, parse_float_csv, parse_scenario_pairs
+from .utils import (
+    build_coupling_diffusion_scenario_pairs,
+    load_kappa_fields,
+    parse_float_csv,
+    parse_scenario_pairs,
+)
 
 
 def build_parser():
@@ -22,6 +27,22 @@ def build_parser():
         default="0.7:0.57024",
         help="Comma-separated beta_c:diffc pairs, e.g. '0.0:0.57024,0.7:0.28512'.",
     )
+    ap.add_argument(
+        "--coupling-diffusion-grid",
+        action="store_true",
+        help=(
+            "Generate scenario pairs from linear-spaced beta_c and diffc ranges: "
+            "first beta sweep at fixed diffc, then diffc sweep at fixed beta."
+        ),
+    )
+    ap.add_argument("--beta-min", type=float, default=0.01)
+    ap.add_argument("--beta-max", type=float, default=1.0)
+    ap.add_argument("--beta-count", type=int, default=10)
+    ap.add_argument("--diffc-min", type=float, default=0.001)
+    ap.add_argument("--diffc-max", type=float, default=1.0)
+    ap.add_argument("--diffc-count", type=int, default=10)
+    ap.add_argument("--fixed-beta", type=float, default=0.70)
+    ap.add_argument("--fixed-diffc", type=float, default=0.57024)
 
     ap.add_argument("--hk-values", type=str, default="864.0")
     ap.add_argument("--por-values", type=str, default="0.35")
@@ -58,9 +79,23 @@ def run(args):
     if args.kappa_file:
         hk_field, vk_field = load_kappa_fields(args.kappa_file)
 
+    if args.coupling_diffusion_grid:
+        scenario_pairs = build_coupling_diffusion_scenario_pairs(
+            beta_min=args.beta_min,
+            beta_max=args.beta_max,
+            beta_count=args.beta_count,
+            diffc_min=args.diffc_min,
+            diffc_max=args.diffc_max,
+            diffc_count=args.diffc_count,
+            fixed_beta=args.fixed_beta,
+            fixed_diffc=args.fixed_diffc,
+        )
+    else:
+        scenario_pairs = parse_scenario_pairs(args.scenario_pairs)
+
     generate_windowed_scenario_dataset(
         outdir=outdir,
-        scenario_pairs=parse_scenario_pairs(args.scenario_pairs),
+        scenario_pairs=scenario_pairs,
         al_values=parse_float_csv(args.al_values),
         at_values=parse_float_csv(args.at_values),
         hk_values=parse_float_csv(args.hk_values),
