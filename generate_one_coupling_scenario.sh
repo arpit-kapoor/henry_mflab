@@ -11,19 +11,34 @@ set -euo pipefail
 #   ./generate_one_coupling_scenario.sh ./data_beta07_diff057 0.7 0.57024 1
 
 OUTDIR="${1:-/Users/akap5486/Projects/groundwater/data/henry_data/one_coupling_scenario}"
-BETA_C="${2:-0.20}"
-DIFFC="${3:-0.0014}"
 LAG="${4:-1}"
+
+# Classic Henry benchmark values for beta_c and diffc are 0.7 and 0.57024, respectively.
+BETA_C="${2:-0.7}"
+DIFFC="${3:-0.57024}"
+
 
 # Optional run-variation dimensions (comma-separated lists).
 # Defaults are centered on the MODFLOW 6 Henry benchmark definition.
-HK_VALUES="${HK_VALUES:-664.0,700.0,864.0,1000.0}"
-POR_VALUES="${POR_VALUES:-0.25,0.30,0.35,0.40,0.45}"
-INFLOW_VALUES="${INFLOW_VALUES:-1.426,2.851,4.2765,5.7024}"
-GHB_HEAD_VALUES="${GHB_HEAD_VALUES:-0.90,0.98,1.00,1.02,1.10}"
-AL_VALUES="${AL_VALUES:-0.0,0.01}"
-AT_VALUES="${AT_VALUES:-0.0,0.005}"
+# HK_VALUES="${HK_VALUES:-664.0,700.0,864.0,1000.0}"
+# POR_VALUES="${POR_VALUES:-0.25,0.30,0.35,0.40,0.45}"
+# INFLOW_VALUES="${INFLOW_VALUES:-1.426,2.851,4.2765,5.7024}"
+# GHB_HEAD_VALUES="${GHB_HEAD_VALUES:-0.90,0.98,1.00,1.02,1.10}"
+# AL_VALUES="${AL_VALUES:-0.0,0.01}"
+# AT_VALUES="${AT_VALUES:-0.0,0.005}"
+# CINLET="${CINLET:-35.0}"
+
+
+# Classic Example values (single value per parameter)
+HK_VALUES="${HK_VALUES:-864.0}"
+POR_VALUES="${POR_VALUES:-0.35}"
+INFLOW_VALUES="${INFLOW_VALUES:-5.7024,2.851}"
+GHB_HEAD_VALUES="${GHB_HEAD_VALUES:-1.0}"
+AL_VALUES="${AL_VALUES:-0.0}"
+AT_VALUES="${AT_VALUES:-0.0}"
 CINLET="${CINLET:-35.0}"
+
+
 
 # Grid/time controls
 NCOL="${NCOL:-80}"
@@ -41,11 +56,11 @@ MF6_EXE="${MF6_EXE:-./.venv/bin/mf6}"
 MAX_RUNS_PER_SCENARIO="${MAX_RUNS_PER_SCENARIO:-}"
 SAVE_TIMESERIES="${SAVE_TIMESERIES:-0}"
 OVERWRITE="${OVERWRITE:-1}"
-WARM_START="${WARM_START:-1}"
+WARM_START="${WARM_START:-0}"
 SCENARIO_PAIRS="${BETA_C}:${DIFFC}"
 
 # Animation controls (post-generation)
-GENERATE_ANIMATION="${GENERATE_ANIMATION:-0}"
+GENERATE_ANIMATION="${GENERATE_ANIMATION:-1}"
 ANIMATE_FPS="${ANIMATE_FPS:-20}"
 ANIMATE_DPI="${ANIMATE_DPI:-150}"
 ANIMATE_SKIP="${ANIMATE_SKIP:-1}"

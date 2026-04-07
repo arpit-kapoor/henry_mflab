@@ -1,5 +1,6 @@
 import itertools
 import json
+import shutil
 
 import numpy as np
 
@@ -20,6 +21,7 @@ INPUT_CHANNEL_NAMES = (
     "diffc",
 )
 INPUT_CHANNEL_INDEX = {name: idx for idx, name in enumerate(INPUT_CHANNEL_NAMES)}
+REQUIRED_RUN_FILES = {"gwf.hds", "gwt.ucn", "windows.npz"}
 
 
 def _validate_input_channel_config():
@@ -81,6 +83,17 @@ def _initial_head_field(nlay, ncol):
 
 def _initial_concentration_field(nlay, ncol):
     return np.full((nlay, ncol), float(STANDARD_INIT_CONCENTRATION), dtype=float)
+
+
+def _prune_run_workspace(run_dir, keep_files):
+    """Delete files not needed for plotting or model training outputs."""
+    for child in run_dir.iterdir():
+        if child.name in keep_files:
+            continue
+        if child.is_file() or child.is_symlink():
+            child.unlink(missing_ok=True)
+        elif child.is_dir():
+            shutil.rmtree(child)
 
 
 def _build_window_tensors(head_ts, conc_ts, lag, nlay, ncol, params):
@@ -221,6 +234,7 @@ def generate_windowed_scenario_dataset(
             sample_file = run_dir / "windows.npz"
 
             if sample_file.exists() and not overwrite:
+                _prune_run_workspace(run_dir, REQUIRED_RUN_FILES)
                 record = {
                     "id": f"{scenario_tag}/{run_tag}",
                     "scenario": scenario_tag,
@@ -303,6 +317,7 @@ def generate_windowed_scenario_dataset(
                     payload["times"] = times
 
                 np.savez_compressed(sample_file, **payload)
+                _prune_run_workspace(run_dir, REQUIRED_RUN_FILES)
 
                 record = {
                     "id": f"{scenario_tag}/{run_tag}",
