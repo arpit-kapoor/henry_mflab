@@ -13,3 +13,6 @@ wheels/
 /out
 /test_out
 
+# MacOS
+.DS_Store
+
