@@ -62,6 +62,11 @@ def build_parser():
     ap.add_argument("--kappa-file", type=str, default=None)
 
     ap.add_argument("--save-timeseries", action="store_true")
+    ap.add_argument(
+        "--save-modflow-files",
+        action="store_true",
+        help="Keep full MODFLOW6 workspace files for each run (default keeps only windows.npz).",
+    )
     ap.add_argument("--mf6-exe", type=str, default="mf6")
     ap.add_argument("--overwrite", action="store_true")
     ap.add_argument("--max-runs-per-scenario", type=int, default=None)
@@ -114,6 +119,7 @@ def run(args):
         max_runs_per_scenario=args.max_runs_per_scenario,
         lag=args.lag,
         save_timeseries=args.save_timeseries,
+        save_modflow_files=args.save_modflow_files,
         warm_start=args.warm_start,
         seed=args.seed,
         train_frac=args.train_frac,

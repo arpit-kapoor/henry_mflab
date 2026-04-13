@@ -11,7 +11,7 @@ set -euo pipefail
 # Usage:
 #   ./generate_coupling_scenarios.sh [OUTDIR] [LAG]
 
-OUTDIR="${1:-/Users/akap5486/Projects/groundwater/data/henry_data/coupling_scenarios}"
+OUTDIR="${1:-/Users/akap5486/Projects/groundwater/data/henry_data/all_scenarios_20x40}"
 LAG="${2:-1}"
 
 # Scenario-grid controls
@@ -34,8 +34,8 @@ AT_VALUES="${AT_VALUES:-0.0}"
 CINLET="${CINLET:-35.0}"
 
 # Grid/time controls
-NCOL="${NCOL:-80}"
-NLAY="${NLAY:-40}"
+NCOL="${NCOL:-40}"
+NLAY="${NLAY:-20}"
 TOTAL_TIME="${TOTAL_TIME:-0.5}"
 NSTP="${NSTP:-100}"
 
@@ -48,6 +48,7 @@ VAL_FRAC="${VAL_FRAC:-0.15}"
 MF6_EXE="${MF6_EXE:-./.venv/bin/mf6}"
 MAX_RUNS_PER_SCENARIO="${MAX_RUNS_PER_SCENARIO:-}"
 SAVE_TIMESERIES="${SAVE_TIMESERIES:-0}"
+SAVE_MODFLOW_FILES="${SAVE_MODFLOW_FILES:-0}"
 OVERWRITE="${OVERWRITE:-1}"
 WARM_START="${WARM_START:-0}"
 KEEP_RAW="${KEEP_RAW:-0}"
@@ -92,6 +93,10 @@ if [[ "$SAVE_TIMESERIES" == "1" ]]; then
   CMD+=(--save-timeseries)
 fi
 
+if [[ "$SAVE_MODFLOW_FILES" == "1" ]]; then
+  CMD+=(--save-modflow-files)
+fi
+
 if [[ "$OVERWRITE" == "1" ]]; then
   CMD+=(--overwrite)
 fi
@@ -106,6 +111,7 @@ echo "Generating coupling/diffusion scenario grid"
 echo "  outdir:      $OUTDIR"
 echo "  raw outdir:  $RAW_OUTDIR"
 echo "  lag:         $LAG"
+echo "  save mf6:    $SAVE_MODFLOW_FILES"
 echo "  beta grid:   [$BETA_MIN, $BETA_MAX] count=$BETA_COUNT (diffc=$FIXED_DIFFC)"
 echo "  diffc grid:  [$DIFFC_MIN, $DIFFC_MAX] count=$DIFFC_COUNT (beta_c=$FIXED_BETA)"
 echo "  command:     ${CMD[*]}"

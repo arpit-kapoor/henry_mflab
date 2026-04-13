@@ -55,6 +55,7 @@ VAL_FRAC="${VAL_FRAC:-0.15}"
 MF6_EXE="${MF6_EXE:-./.venv/bin/mf6}"
 MAX_RUNS_PER_SCENARIO="${MAX_RUNS_PER_SCENARIO:-}"
 SAVE_TIMESERIES="${SAVE_TIMESERIES:-0}"
+SAVE_MODFLOW_FILES="${SAVE_MODFLOW_FILES:-0}"
 OVERWRITE="${OVERWRITE:-1}"
 WARM_START="${WARM_START:-0}"
 SCENARIO_PAIRS="${BETA_C}:${DIFFC}"
@@ -95,6 +96,10 @@ if [[ "$SAVE_TIMESERIES" == "1" ]]; then
   CMD+=(--save-timeseries)
 fi
 
+if [[ "$SAVE_MODFLOW_FILES" == "1" ]]; then
+  CMD+=(--save-modflow-files)
+fi
+
 if [[ "$OVERWRITE" == "1" ]]; then
   CMD+=(--overwrite)
 fi
@@ -114,13 +119,20 @@ echo "  grid:      nlay=$NLAY ncol=$NCOL"
 echo "  time:      total_time=$TOTAL_TIME nstp=$NSTP"
 echo "  split:     seed=$SEED train=$TRAIN_FRAC val=$VAL_FRAC"
 echo "  warm_start:$WARM_START"
+echo "  save mf6:  $SAVE_MODFLOW_FILES"
 echo "  mf6 exe:   $MF6_EXE"
 echo "  animate:   $GENERATE_ANIMATION"
 echo "  command:   ${CMD[*]}"
 
 "${CMD[@]}"
 
-if [[ "$GENERATE_ANIMATION" == "1" ]]; then
+if [[ "$GENERATE_ANIMATION" == "1" && "$SAVE_MODFLOW_FILES" != "1" ]]; then
+  echo
+  echo "Skipping animation because SAVE_MODFLOW_FILES=0 removed gwf.hds/gwt.ucn."
+  echo "Set SAVE_MODFLOW_FILES=1 to enable animation output."
+fi
+
+if [[ "$GENERATE_ANIMATION" == "1" && "$SAVE_MODFLOW_FILES" == "1" ]]; then
   RUN_WORKSPACE="$(uv run python - "$OUTDIR" "$BETA_C" "$DIFFC" <<'PY'
 import json
 import pathlib as pl

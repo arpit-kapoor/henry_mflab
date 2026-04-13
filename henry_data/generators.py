@@ -21,7 +21,7 @@ INPUT_CHANNEL_NAMES = (
     "diffc",
 )
 INPUT_CHANNEL_INDEX = {name: idx for idx, name in enumerate(INPUT_CHANNEL_NAMES)}
-REQUIRED_RUN_FILES = {"gwf.hds", "gwt.ucn", "windows.npz"}
+REQUIRED_RUN_FILES = {"windows.npz"}
 
 
 def _validate_input_channel_config():
@@ -163,6 +163,7 @@ def generate_windowed_scenario_dataset(
     max_runs_per_scenario,
     lag,
     save_timeseries,
+    save_modflow_files,
     warm_start,
     seed,
     train_frac,
@@ -234,7 +235,8 @@ def generate_windowed_scenario_dataset(
             sample_file = run_dir / "windows.npz"
 
             if sample_file.exists() and not overwrite:
-                _prune_run_workspace(run_dir, REQUIRED_RUN_FILES)
+                if not save_modflow_files:
+                    _prune_run_workspace(run_dir, REQUIRED_RUN_FILES)
                 record = {
                     "id": f"{scenario_tag}/{run_tag}",
                     "scenario": scenario_tag,
@@ -317,7 +319,8 @@ def generate_windowed_scenario_dataset(
                     payload["times"] = times
 
                 np.savez_compressed(sample_file, **payload)
-                _prune_run_workspace(run_dir, REQUIRED_RUN_FILES)
+                if not save_modflow_files:
+                    _prune_run_workspace(run_dir, REQUIRED_RUN_FILES)
 
                 record = {
                     "id": f"{scenario_tag}/{run_tag}",
@@ -394,6 +397,10 @@ def generate_windowed_scenario_dataset(
             "fallback_head": float(STANDARD_INIT_HEAD),
             "fallback_concentration": float(STANDARD_INIT_CONCENTRATION),
             "notes": "GWF and GWT initial conditions use separate explicit constants.",
+        },
+        "artifacts": {
+            "save_modflow_files": bool(save_modflow_files),
+            "required_run_files": sorted(REQUIRED_RUN_FILES),
         },
         "lag": int(lag),
         "train_frac": train_frac,
