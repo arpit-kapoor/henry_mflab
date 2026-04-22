@@ -34,6 +34,13 @@ def build_and_run_henry(
     ws = pl.Path(workspace)
     ws.mkdir(parents=True, exist_ok=True)
 
+    # flopy runs MF6 from the simulation workspace, so resolve path-like
+    # executable values once to avoid workspace-relative lookup failures.
+    exe = str(exe_name)
+    exe_path = pl.Path(exe).expanduser()
+    if exe_path.parent != pl.Path("."):
+        exe = str(exe_path.resolve())
+
     nrow = 1
     delr = Lx / ncol
     delc = 1.0
@@ -48,7 +55,7 @@ def build_and_run_henry(
     tsmult = [1.0]
 
     # Create a MODFLOW 6 simulation container (workspace + executable).
-    sim = flopy.mf6.MFSimulation(sim_name="henry", sim_ws=str(ws), exe_name=exe_name)
+    sim = flopy.mf6.MFSimulation(sim_name="henry", sim_ws=str(ws), exe_name=exe)
 
     # Define time discretization (single stress period split into nstp time steps).
     flopy.mf6.ModflowTdis(

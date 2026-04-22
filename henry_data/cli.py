@@ -31,8 +31,8 @@ def build_parser():
         "--coupling-diffusion-grid",
         action="store_true",
         help=(
-            "Generate scenario pairs from linear-spaced beta_c and diffc ranges: "
-            "first beta sweep at fixed diffc, then diffc sweep at fixed beta."
+            "Generate scenario pairs from linear-spaced beta_c and diffc ranges "
+            "as a full Cartesian grid."
         ),
     )
     ap.add_argument("--beta-min", type=float, default=0.01)

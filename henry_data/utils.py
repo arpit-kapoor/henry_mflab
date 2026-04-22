@@ -113,8 +113,8 @@ def build_coupling_diffusion_scenario_pairs(
     beta_vals = np.linspace(float(beta_min), float(beta_max), beta_count)
     diffc_vals = np.linspace(float(diffc_min), float(diffc_max), diffc_count)
 
-    pairs = [(float(beta), float(fixed_diffc)) for beta in beta_vals]
-    pairs.extend((float(fixed_beta), float(diffc)) for diffc in diffc_vals)
+    # Build the full Cartesian grid of (beta_c, diffc) pairs.
+    pairs = [(float(beta), float(diffc)) for beta in beta_vals for diffc in diffc_vals]
     return pairs
 
 

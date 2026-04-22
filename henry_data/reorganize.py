@@ -55,36 +55,30 @@ def reorganize_coupling_diffusion_outputs(
     lag: int,
     overwrite: bool,
 ) -> dict:
-    coupling_root = outdir / "coupling_scenarios"
-    diffusion_root = outdir / "diffusion_scenarios"
-    coupling_root.mkdir(parents=True, exist_ok=True)
-    diffusion_root.mkdir(parents=True, exist_ok=True)
+    scenarios_root = outdir / "scenarios"
+    scenarios_root.mkdir(parents=True, exist_ok=True)
 
     scenarios_manifest = {
-        "layout": "segregated_coupling_and_diffusion",
+        "layout": "coupling_diffusion_grid",
         "lag": int(lag),
-        "coupling_scenarios": [],
-        "diffusion_scenarios": [],
+        "scenarios": [],
     }
 
     raw_manifest = _load_json(raw_outdir / "manifest.json")
     scenario_entries = raw_manifest.get("scenarios", [])
-    expected = int(beta_count) + int(diffc_count)
+    expected = int(beta_count) * int(diffc_count)
     if len(scenario_entries) != expected:
         raise ValueError(
             f"Expected {expected} scenarios in raw manifest, found {len(scenario_entries)}"
         )
 
-    coupling_entries = scenario_entries[: int(beta_count)]
-    diffusion_entries = scenario_entries[int(beta_count) : int(beta_count) + int(diffc_count)]
-
-    for idx, scen_summary in enumerate(coupling_entries, start=1):
+    for idx, scen_summary in enumerate(scenario_entries, start=1):
         raw_name = scen_summary["scenario"]
         raw_dir = raw_outdir / raw_name
         if not raw_dir.exists():
             raise FileNotFoundError(f"Expected raw scenario directory not found: {raw_dir}")
 
-        target_dir = coupling_root / f"scenario_{idx:02d}"
+        target_dir = scenarios_root / f"scenario_{idx:02d}"
         if target_dir.exists() and overwrite:
             shutil.rmtree(target_dir)
         target_dir.mkdir(parents=True, exist_ok=True)
@@ -93,7 +87,6 @@ def reorganize_coupling_diffusion_outputs(
         runs_cfg = _move_runs_numeric(raw_dir, target_dir, scen, overwrite=overwrite)
 
         scenario_config = {
-            "scenario_group": "coupling",
             "scenario_index": idx,
             "beta_c": float(scen["beta_c"]),
             "diffc": float(scen["diffc"]),
@@ -110,46 +103,7 @@ def reorganize_coupling_diffusion_outputs(
             {"runs": runs_cfg, "failures": scen.get("failures", [])},
         )
 
-        scenarios_manifest["coupling_scenarios"].append(
-            {
-                "scenario_dir": str(target_dir),
-                **scenario_config,
-            }
-        )
-
-    for idx, scen_summary in enumerate(diffusion_entries, start=1):
-        raw_name = scen_summary["scenario"]
-        raw_dir = raw_outdir / raw_name
-        if not raw_dir.exists():
-            raise FileNotFoundError(f"Expected raw scenario directory not found: {raw_dir}")
-
-        target_dir = diffusion_root / f"scenario_{idx:02d}"
-        if target_dir.exists() and overwrite:
-            shutil.rmtree(target_dir)
-        target_dir.mkdir(parents=True, exist_ok=True)
-
-        scen = _load_json(raw_dir / "scenario_manifest.json")
-        runs_cfg = _move_runs_numeric(raw_dir, target_dir, scen, overwrite=overwrite)
-
-        scenario_config = {
-            "scenario_group": "diffusion",
-            "scenario_index": idx,
-            "beta_c": float(scen["beta_c"]),
-            "diffc": float(scen["diffc"]),
-            "lag": int(lag),
-            "n_total_runs": scen.get("n_total_runs", len(runs_cfg)),
-            "n_ok_runs": scen.get("n_ok_runs", 0),
-            "n_skipped_runs": scen.get("n_skipped_runs", 0),
-            "n_failed_runs": scen.get("n_failed_runs", 0),
-        }
-
-        _write_json(target_dir / "scenario_config.json", scenario_config)
-        _write_json(
-            target_dir / "runs_config.json",
-            {"runs": runs_cfg, "failures": scen.get("failures", [])},
-        )
-
-        scenarios_manifest["diffusion_scenarios"].append(
+        scenarios_manifest["scenarios"].append(
             {
                 "scenario_dir": str(target_dir),
                 **scenario_config,
@@ -162,7 +116,7 @@ def reorganize_coupling_diffusion_outputs(
 
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
-        description="Reorganize raw coupling/diffusion scenario outputs into clean scenario/run naming."
+        description="Reorganize raw coupling/diffusion grid outputs into clean scenario/run naming."
     )
     ap.add_argument("--raw-outdir", type=str, required=True)
     ap.add_argument("--outdir", type=str, required=True)
@@ -184,8 +138,7 @@ def main():
         overwrite=bool(args.overwrite),
     )
     print(f"Reorganized scenarios in: {args.outdir}")
-    print(f"  Coupling scenarios:  {len(manifest['coupling_scenarios'])}")
-    print(f"  Diffusion scenarios: {len(manifest['diffusion_scenarios'])}")
+    print(f"  Grid scenarios:      {len(manifest['scenarios'])}")
 
 
 if __name__ == "__main__":

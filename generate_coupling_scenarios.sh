@@ -1,34 +1,46 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Generate 20 Henry coupling/diffusion scenarios and reorganize outputs into
+# Generate Henry coupling/diffusion scenarios on a full beta_c x diffc grid and reorganize outputs into
 # clean folders with numeric run names and JSON parameter metadata.
 #
 # Scenario design:
-#   - First 10 scenarios: beta_c in [0.01, 1.0], diffc fixed at 0.57024
-#   - Next 10 scenarios: diffc in [0.001, 1.0], beta_c fixed at 0.70
+#   - Full Cartesian grid of beta_c in [BETA_MIN, BETA_MAX] and
+#     diffc in [DIFFC_MIN, DIFFC_MAX]
+#   - With BETA_COUNT=5 and DIFFC_COUNT=5, this yields 25 scenarios
 #
 # Usage:
 #   ./generate_coupling_scenarios.sh [OUTDIR] [LAG]
 
-OUTDIR="${1:-/Users/akap5486/Projects/groundwater/data/henry_data/all_scenarios_20x40}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+OUTDIR="${1:-/Users/arpitkapoor/Projects/groundwater/data/henry_data/grid_scenarios_20x40}"
 LAG="${2:-1}"
 
 # Scenario-grid controls
-BETA_MIN="${BETA_MIN:-0.01}"
+BETA_MIN="${BETA_MIN:-0.2}"
 BETA_MAX="${BETA_MAX:-1.0}"
 BETA_COUNT="${BETA_COUNT:-5}"
 DIFFC_MIN="${DIFFC_MIN:-0.001}"
-DIFFC_MAX="${DIFFC_MAX:-1.0}"
+DIFFC_MAX="${DIFFC_MAX:-0.5}"
 DIFFC_COUNT="${DIFFC_COUNT:-5}"
 FIXED_BETA="${FIXED_BETA:-0.70}"
 FIXED_DIFFC="${FIXED_DIFFC:-0.57024}"
 
+# # Run-variation dimensions (CSV lists)
+# HK_VALUES="${HK_VALUES:-664.0,864.0,1000.0}"
+# POR_VALUES="${POR_VALUES:-0.25,0.35,0.45}"
+# INFLOW_VALUES="${INFLOW_VALUES:-1.426,2.851,5.7024}"
+# GHB_HEAD_VALUES="${GHB_HEAD_VALUES:-0.90,1.00,1.04,}"
+# AL_VALUES="${AL_VALUES:-0.0}"
+# AT_VALUES="${AT_VALUES:-0.0}"
+# CINLET="${CINLET:-35.0}"
+
 # Run-variation dimensions (CSV lists)
-HK_VALUES="${HK_VALUES:-664.0,864.0,1000.0}"
-POR_VALUES="${POR_VALUES:-0.25,0.35,0.45}"
+HK_VALUES="${HK_VALUES:-864.0}"
+POR_VALUES="${POR_VALUES:-0.35}"
 INFLOW_VALUES="${INFLOW_VALUES:-1.426,2.851,5.7024}"
-GHB_HEAD_VALUES="${GHB_HEAD_VALUES:-0.90,1.00,1.04,}"
+GHB_HEAD_VALUES="${GHB_HEAD_VALUES:-1.00}"
 AL_VALUES="${AL_VALUES:-0.0}"
 AT_VALUES="${AT_VALUES:-0.0}"
 CINLET="${CINLET:-35.0}"
@@ -45,7 +57,7 @@ TRAIN_FRAC="${TRAIN_FRAC:-0.7}"
 VAL_FRAC="${VAL_FRAC:-0.15}"
 
 # Runtime controls
-MF6_EXE="${MF6_EXE:-./.venv/bin/mf6}"
+MF6_EXE="${MF6_EXE:-$SCRIPT_DIR/.venv/bin/mf6}"
 MAX_RUNS_PER_SCENARIO="${MAX_RUNS_PER_SCENARIO:-}"
 SAVE_TIMESERIES="${SAVE_TIMESERIES:-0}"
 SAVE_MODFLOW_FILES="${SAVE_MODFLOW_FILES:-0}"
@@ -54,6 +66,12 @@ WARM_START="${WARM_START:-0}"
 KEEP_RAW="${KEEP_RAW:-0}"
 
 RAW_OUTDIR="$OUTDIR/_raw_generation"
+
+if [[ "$MF6_EXE" == */* && ! -x "$MF6_EXE" ]]; then
+  echo "ERROR: mf6 executable not found or not executable: $MF6_EXE" >&2
+  echo "Hint: set MF6_EXE to an absolute executable path, or install mf6 in PATH and set MF6_EXE=mf6." >&2
+  exit 1
+fi
 
 CMD=(
   uv run python run_henry.py
@@ -112,8 +130,9 @@ echo "  outdir:      $OUTDIR"
 echo "  raw outdir:  $RAW_OUTDIR"
 echo "  lag:         $LAG"
 echo "  save mf6:    $SAVE_MODFLOW_FILES"
-echo "  beta grid:   [$BETA_MIN, $BETA_MAX] count=$BETA_COUNT (diffc=$FIXED_DIFFC)"
-echo "  diffc grid:  [$DIFFC_MIN, $DIFFC_MAX] count=$DIFFC_COUNT (beta_c=$FIXED_BETA)"
+echo "  beta grid:   [$BETA_MIN, $BETA_MAX] count=$BETA_COUNT"
+echo "  diffc grid:  [$DIFFC_MIN, $DIFFC_MAX] count=$DIFFC_COUNT"
+echo "  scenarios:   $((BETA_COUNT * DIFFC_COUNT)) (full Cartesian grid)"
 echo "  command:     ${CMD[*]}"
 
 "${CMD[@]}"
