@@ -114,10 +114,10 @@ def _build_window_tensors(head_ts, conc_ts, lag, nlay, ncol, params):
     diffc_field = _broadcast_channel(params["diffc"], nlay, ncol)
 
     static_channel_fields = {
-        "hk": hk_field,
-        "porosity": por_field,
+        # "hk": hk_field,
+        # "porosity": por_field,
         "inflow_left_boundary": inflow_field,
-        "ghb_head_right_boundary": ghb_field,
+        # "ghb_head_right_boundary": ghb_field,
         "beta_c": beta_field,
         "diffc": diffc_field,
     }
