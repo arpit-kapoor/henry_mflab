@@ -13,10 +13,10 @@ STANDARD_INIT_CONCENTRATION = 35.0
 INPUT_CHANNEL_NAMES = (
     "concentration_t",
     "head_t",
-    "hk",
-    "porosity",
+    # "hk",
+    # "porosity",
     "inflow_left_boundary",
-    "ghb_head_right_boundary",
+    # "ghb_head_right_boundary",
     "beta_c",
     "diffc",
 )
@@ -31,10 +31,10 @@ def _validate_input_channel_config():
     required = {
         "concentration_t",
         "head_t",
-        "hk",
-        "porosity",
+        # "hk",
+        # "porosity",
         "inflow_left_boundary",
-        "ghb_head_right_boundary",
+        # "ghb_head_right_boundary",
         "beta_c",
         "diffc",
     }
@@ -53,10 +53,10 @@ def _scenario_tag(beta_c, diffc):
 def _run_tag(run_index, params):
     return (
         f"run_{run_index:06d}_"
-        f"hk{params['hk']:.2f}_"
-        f"por{params['por']:.3f}_"
+        # f"hk{params['hk']:.2f}_"
+        # f"por{params['por']:.3f}_"
         f"in{params['inflow']:.4f}_"
-        f"ghb{params['ghb_head']:.4f}"
+        # f"ghb{params['ghb_head']:.4f}"
     )
 
 

@@ -14,15 +14,15 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-OUTDIR="${1:-/Users/arpitkapoor/Projects/groundwater/data/henry_data/grid_scenarios_20x40}"
+OUTDIR="${1:-/Users/akap5486/Projects/groundwater/data/henry_data/grid_scenarios_20x40}"
 LAG="${2:-1}"
 
 # Scenario-grid controls
-BETA_MIN="${BETA_MIN:-0.2}"
+BETA_MIN="${BETA_MIN:-0.1}"
 BETA_MAX="${BETA_MAX:-1.0}"
 BETA_COUNT="${BETA_COUNT:-5}"
-DIFFC_MIN="${DIFFC_MIN:-0.001}"
-DIFFC_MAX="${DIFFC_MAX:-0.5}"
+DIFFC_MIN="${DIFFC_MIN:-0.0008}"
+DIFFC_MAX="${DIFFC_MAX:-0.128}"
 DIFFC_COUNT="${DIFFC_COUNT:-5}"
 FIXED_BETA="${FIXED_BETA:-0.70}"
 FIXED_DIFFC="${FIXED_DIFFC:-0.57024}"
@@ -39,7 +39,7 @@ FIXED_DIFFC="${FIXED_DIFFC:-0.57024}"
 # Run-variation dimensions (CSV lists)
 HK_VALUES="${HK_VALUES:-864.0}"
 POR_VALUES="${POR_VALUES:-0.35}"
-INFLOW_VALUES="${INFLOW_VALUES:-1.426,2.851,5.7024}"
+INFLOW_VALUES="${INFLOW_VALUES:-1.426,2.1385,2.851,4.2767,5.7024,7.1281}"
 GHB_HEAD_VALUES="${GHB_HEAD_VALUES:-1.00}"
 AL_VALUES="${AL_VALUES:-0.0}"
 AT_VALUES="${AT_VALUES:-0.0}"
@@ -49,7 +49,7 @@ CINLET="${CINLET:-35.0}"
 NCOL="${NCOL:-40}"
 NLAY="${NLAY:-20}"
 TOTAL_TIME="${TOTAL_TIME:-0.5}"
-NSTP="${NSTP:-100}"
+NSTP="${NSTP:-50}"
 
 # Dataset split controls
 SEED="${SEED:-42}"
