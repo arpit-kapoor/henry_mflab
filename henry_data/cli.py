@@ -73,6 +73,10 @@ def build_parser():
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--train-frac", type=float, default=0.7)
     ap.add_argument("--val-frac", type=float, default=0.15)
+
+    ap.add_argument("--dynamic-inflow", action="store_true", help="Use a dynamic inflow boundary condition and save its time series data.")
+    ap.add_argument("--dynamic-tides", action="store_true", help="Use dynamic tidal boundary conditions and save their time series data.")
+    
     return ap
 
 
@@ -124,6 +128,8 @@ def run(args):
         seed=args.seed,
         train_frac=args.train_frac,
         val_frac=args.val_frac,
+        dynamic_inflow=args.dynamic_inflow,
+        dynamic_tides=args.dynamic_tides,
     )
 
 

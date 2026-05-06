@@ -15,8 +15,8 @@ INPUT_CHANNEL_NAMES = (
     "head_t",
     # "hk",
     # "porosity",
-    "inflow_left_boundary",
-    # "ghb_head_right_boundary",
+    "flux_left_boundary",
+    "ghb_flux_right_boundary",
     "beta_c",
     "diffc",
 )
@@ -33,8 +33,8 @@ def _validate_input_channel_config():
         "head_t",
         # "hk",
         # "porosity",
-        "inflow_left_boundary",
-        # "ghb_head_right_boundary",
+        "flux_left_boundary",
+        # "ghb_flux_right_boundary",
         "beta_c",
         "diffc",
     }
@@ -96,7 +96,7 @@ def _prune_run_workspace(run_dir, keep_files):
             shutil.rmtree(child)
 
 
-def _build_window_tensors(head_ts, conc_ts, q_in_ts, lag, nlay, ncol, params):
+def _build_window_tensors(head_ts, conc_ts, q_in_ts, q_ghb_ts, lag, nlay, ncol, params):
     t_indices = valid_window_indices(head_ts.shape[0], lag)
     n_windows = int(t_indices.size)
     if n_windows == 0:
@@ -116,8 +116,8 @@ def _build_window_tensors(head_ts, conc_ts, q_in_ts, lag, nlay, ncol, params):
     static_channel_fields = {
         # "hk": hk_field,
         # "porosity": por_field,
-        # "inflow_left_boundary": inflow_field,
-        # "ghb_head_right_boundary": ghb_field,
+        # "flux_left_boundary": flux_field,
+        # "ghb_flux_right_boundary": ghb_field,
         "beta_c": beta_field,
         "diffc": diffc_field,
     }
@@ -130,7 +130,8 @@ def _build_window_tensors(head_ts, conc_ts, q_in_ts, lag, nlay, ncol, params):
         t_lag = t + lag
         input_tensor[i, INPUT_CHANNEL_INDEX["concentration_t"]] = conc_ts[t]
         input_tensor[i, INPUT_CHANNEL_INDEX["head_t"]] = head_ts[t]
-        input_tensor[i, INPUT_CHANNEL_INDEX["inflow_left_boundary"]] = _left_boundary_channel(q_in_ts[t], nlay, ncol)
+        input_tensor[i, INPUT_CHANNEL_INDEX["flux_left_boundary"]] = _left_boundary_channel(q_in_ts[t], nlay, ncol)
+        input_tensor[i, INPUT_CHANNEL_INDEX["ghb_flux_right_boundary"]] = _right_boundary_channel(q_ghb_ts[t], nlay, ncol)
 
         output_tensor[i, 0] = conc_ts[t_lag]
         output_tensor[i, 1] = head_ts[t_lag]
@@ -169,6 +170,8 @@ def generate_windowed_scenario_dataset(
     seed,
     train_frac,
     val_frac,
+    dynamic_inflow,
+    dynamic_tides,
 ):
     outdir.mkdir(parents=True, exist_ok=True)
 
@@ -252,7 +255,7 @@ def generate_windowed_scenario_dataset(
 
             print(f"  [{run_index:04d}/{len(run_combinations):04d}] RUN  {run_tag}")
             try:
-                head_ts, conc_ts, q_in_ts, times = build_and_run_henry(
+                head_ts, conc_ts, q_in_ts, q_ghb_ts, times = build_and_run_henry(
                     workspace=run_dir,
                     ncol=ncol,
                     nlay=nlay,
@@ -274,6 +277,8 @@ def generate_windowed_scenario_dataset(
                     vk_field=vk_field,
                     return_timeseries=True,
                     exe_name=exe_name,
+                    dynamic_inflow=dynamic_inflow,
+                    dynamic_tides=dynamic_tides,
                 )
 
                 prev_head_final = np.asarray(head_ts[-1], dtype=float).copy()
@@ -283,6 +288,7 @@ def generate_windowed_scenario_dataset(
                     head_ts=head_ts,
                     conc_ts=conc_ts,
                     q_in_ts=q_in_ts,
+                    q_ghb_ts=q_ghb_ts,
                     lag=lag,
                     nlay=nlay,
                     ncol=ncol,

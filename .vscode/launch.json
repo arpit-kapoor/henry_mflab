@@ -28,7 +28,10 @@
                 "--seed", "42",
                 "--train-frac", "0.7",
                 "--val-frac", "0.15",
-                "--overwrite"
+                "--overwrite",
+                "--dynamic-inflow",
+                "--dynamic-tides",
+                "--save-modflow-files"
             ]
         }
     ]
