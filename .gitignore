@@ -12,6 +12,7 @@ wheels/
 # Results
 /out
 /test_out
+/debug_out*
 
 # MacOS
 .DS_Store
