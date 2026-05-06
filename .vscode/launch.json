@@ -1,0 +1,35 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: Debug one coupling scenario",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/run_henry.py",
+            "python": "${workspaceFolder}/.venv/bin/python",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "args": [
+                "--outdir", "${workspaceFolder}/debug_out_single_scenario",
+                "--ncol", "40",
+                "--nlay", "20",
+                "--total-time", "0.5",
+                "--nstp", "100",
+                "--mf6-exe", "${workspaceFolder}/.venv/bin/mf6",
+                "--scenario-pairs", "0.7:0.57024",
+                "--lag", "1",
+                "--hk-values", "864.0",
+                "--por-values", "0.35",
+                "--al-values", "0.0",
+                "--at-values", "0.0",
+                "--inflow-values", "2.851",
+                "--ghb-head-values", "1.0",
+                "--cinlet", "35.0",
+                "--seed", "42",
+                "--train-frac", "0.7",
+                "--val-frac", "0.15",
+                "--overwrite"
+            ]
+        }
+    ]
+}

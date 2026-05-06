@@ -30,6 +30,7 @@ def build_and_run_henry(
     vk_field=None,
     return_timeseries=False,
     exe_name="mf6",
+    dynamic_inflow=True
 ):
     ws = pl.Path(workspace)
     ws.mkdir(parents=True, exist_ok=True)
@@ -131,9 +132,33 @@ def build_and_run_henry(
     ghb_spd = [[(k, 0, ncol - 1), ghb_head, float(ghbcond[k]), cinlet] for k in range(nlay)]
     flopy.mf6.ModflowGwfghb(gwf, stress_period_data=ghb_spd, pname="GHB-1", auxiliary="CONCENTRATION")
 
-    # Left boundary (WEL): distributed freshwater inflow with zero salinity.
-    wel_spd = [[(k, 0, 0), inflow / nlay, 0.0] for k in range(nlay)]
-    flopy.mf6.ModflowGwfwel(gwf, stress_period_data=wel_spd, pname="WEL-1", auxiliary="CONCENTRATION")
+
+    if not dynamic_inflow:
+        # Left boundary (WEL): distributed freshwater inflow with zero salinity.
+        wel_spd = [[(k, 0, 0), inflow / nlay, 0.0] for k in range(nlay)]
+        flopy.mf6.ModflowGwfwel(gwf, stress_period_data=wel_spd, pname="WEL-1", auxiliary="CONCENTRATION")
+    else:
+        # Define time-series data: [(Time, Q_in)]
+        times = np.linspace(0, total_time, nstp[0])
+        q_in_series = inflow/nlay * (1 + 0.5 * np.sin(2 * np.pi * times / total_time)) + np.random.normal(0, 0.01, len(times))
+        ts_data = list(zip(times, q_in_series))
+
+        # Define stress period data for the well with a placeholder flow rate (will be overridden by time series).
+        wel_spd = {0:[[(k, 0, 0), "Q_in", 0.0] for k in range(nlay)]}
+        wel = flopy.mf6.ModflowGwfwel(
+            gwf,
+            stress_period_data=wel_spd,
+            pname="WEL-1",
+            auxiliary="CONCENTRATION"
+        )
+
+        # Initialize the Time-Series array for the well flow rate (Q_in).
+        wel.ts.initialize(
+            filename="wel_ts.ts",
+            timeseries=ts_data,
+            time_series_namerecord="Q_in",
+            interpolation_methodrecord="stepwise"
+        )
 
     # Save and print flow outputs.
     flopy.mf6.ModflowGwfoc(
@@ -194,7 +219,15 @@ def build_and_run_henry(
     conc_ts = cobj.get_alldata().squeeze()
     times = np.asarray(hobj.get_times(), dtype=float)
 
-    if return_timeseries:
-        return head_ts, conc_ts, times
 
-    return head_ts[-1], conc_ts[-1]
+    if dynamic_inflow:
+        # If dynamic inflow was used, also read the time series data for the well flow rate.
+        bobj = flopy.utils.CellBudgetFile(ws / "gwf.cbc")
+        q_in_ts = np.array([np.sum(stepdata['q']) for stepdata in bobj.get_data(text="WEL")])
+    else:
+        q_in_ts = np.full((nstp[0],), inflow)
+
+    if return_timeseries:
+        return head_ts, conc_ts, q_in_ts, times
+
+    return head_ts[-1], conc_ts[-1], q_in_ts[-1]
