@@ -93,6 +93,7 @@ def animate_henry(
     dpi=150,
     skip_frames=1,
     run_path=None,
+    dynamic_scales=False,
 ):
     """
     Create animation of Henry problem results.
@@ -111,6 +112,8 @@ def animate_henry(
         Only plot every Nth time step (for faster rendering)
     run_path : str or None
         Explicit path to the run workspace containing gwf.hds and gwt.ucn
+    dynamic_scales : bool
+        If True, scale the colormap independently for each frame
     """
     ds = pl.Path(dataset_path)
     ws, run_dirs = _resolve_run_workspace(ds, run_path)
@@ -199,6 +202,7 @@ def animate_henry(
     plt.tight_layout(rect=[0, 0.05, 1, 0.96])
     
     def update_frame(frame_num):
+        nonlocal cbar_head, cbar_conc
         """Update function for animation."""
         idx = frame_indices[frame_num]
         
@@ -212,8 +216,23 @@ def animate_henry(
         head_plot = np.where(head_data[idx] < 1e20, head_data[idx], np.nan)
         conc_plot = np.where(conc_data[idx] < 1e20, conc_data[idx], np.nan)
         
-        ax_head.contourf(X, Z, head_plot, levels=head_levels, cmap='Blues')
-        ax_conc.contourf(X, Z, conc_plot, levels=conc_levels, cmap='Reds')
+        if dynamic_scales:
+            head_valid_f = head_plot[~np.isnan(head_plot)]
+            conc_valid_f = conc_plot[~np.isnan(conc_plot)]
+            
+            h_levs = _fixed_levels(head_valid_f.min(), head_valid_f.max()) if len(head_valid_f) else head_levels
+            c_levs = _fixed_levels(conc_valid_f.min(), conc_valid_f.max()) if len(conc_valid_f) else conc_levels
+            
+            im_h = ax_head.contourf(X, Z, head_plot, levels=h_levs, cmap='Blues')
+            im_c = ax_conc.contourf(X, Z, conc_plot, levels=c_levs, cmap='Reds')
+            
+            cbar_head.ax.clear()
+            cbar_conc.ax.clear()
+            cbar_head = fig.colorbar(im_h, cax=cbar_head.ax, label='Head (m)')
+            cbar_conc = fig.colorbar(im_c, cax=cbar_conc.ax, label='Concentration (kg/m³)')
+        else:
+            ax_head.contourf(X, Z, head_plot, levels=head_levels, cmap='Blues')
+            ax_conc.contourf(X, Z, conc_plot, levels=conc_levels, cmap='Reds')
         
         # Update time text
         time_text.set_text(f'Time: {times[idx]:.4f} days (Step {idx+1}/{ntimes})')
@@ -321,6 +340,11 @@ def main():
         default=1,
         help="Skip every N frames for faster rendering (default: 1, no skipping)"
     )
+    parser.add_argument(
+        "--dynamic-scales",
+        action="store_true",
+        help="Scale colormaps dynamically per frame instead of globally"
+    )
     
     args = parser.parse_args()
     
@@ -331,6 +355,7 @@ def main():
         dpi=args.dpi,
         skip_frames=args.skip,
         run_path=args.run_path,
+        dynamic_scales=args.dynamic_scales,
     )
 
 

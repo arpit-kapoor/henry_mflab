@@ -30,8 +30,21 @@
                 "--val-frac", "0.15",
                 "--overwrite",
                 "--dynamic-inflow",
-                "--dynamic-tides",
+                // "--dynamic-tides",
                 "--save-modflow-files"
+            ]
+        },
+        {
+            "name": "Python: Debug Animate Henry",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/animate_henry.py",
+            "python": "${workspaceFolder}/.venv/bin/python",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "args": [
+                "--dataset-path", "${workspaceFolder}/debug_out_single_scenario",
+                "--dynamic-scales"
             ]
         }
     ]

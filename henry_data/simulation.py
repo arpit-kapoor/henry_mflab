@@ -128,10 +128,10 @@ def build_and_run_henry(
     # Buoyancy coupling: maps concentration from GWT to density effects in GWF.
     flopy.mf6.ModflowGwfbuy(gwf, packagedata=[(0, beta_c, 0.0, "gwt", "concentration")])
 
-    # Right boundary (GHB): fixed head with conductance and seawater concentration.
-    ghbcond = hk_arr[:, -1] * delv * delc / (0.5 * delr)
-    ghb_spd = [[(k, 0, ncol - 1), ghb_head, float(ghbcond[k]), cinlet] for k in range(nlay)]
-    flopy.mf6.ModflowGwfghb(gwf, stress_period_data=ghb_spd, pname="GHB-1", auxiliary="CONCENTRATION")
+    # # Right boundary (GHB): fixed head with conductance and seawater concentration.
+    # ghbcond = hk_arr[:, -1] * delv * delc / (0.5 * delr)
+    # ghb_spd = [[(k, 0, ncol - 1), ghb_head, float(ghbcond[k]), cinlet] for k in range(nlay)]
+    # flopy.mf6.ModflowGwfghb(gwf, stress_period_data=ghb_spd, pname="GHB-1", auxiliary="CONCENTRATION")
 
     # Calculate conductance (remains constant regardless of tides)
     ghbcond = hk_arr[:, -1] * delv * delc / (0.5 * delr)
@@ -146,7 +146,7 @@ def build_and_run_henry(
         
         # Tidal amplitude of 0.5m around mean sea level (ghb_head), 
         # with a 0.5-day (12-hour) tidal period
-        tidal_heads = ghb_head + 0.5 * np.sin(2 * np.pi * times / 0.5) 
+        tidal_heads = ghb_head + 0.5 * np.cos(2 * np.pi * times / 0.5) 
         ts_data = list(zip(times, tidal_heads))
 
         # Map the "tide_head" string to the column where the head value normally goes
@@ -261,7 +261,10 @@ def build_and_run_henry(
 
     # Extract flow rates for the well (WEL) and GHB boundaries across all time steps.
     q_in_ts = np.array([np.sum(stepdata['q']) for stepdata in bobj.get_data(text="WEL")])
-    q_ghb_ts = np.array([np.sum(stepdata['q']) for stepdata in bobj.get_data(text="GHB")])
+    if dynamic_tides:
+        q_ghb_ts = tidal_heads
+    else: 
+        q_ghb_ts = np.array([np.sum(stepdata['q']) for stepdata in bobj.get_data(text="GHB")])
 
     if return_timeseries:
         return head_ts, conc_ts, q_in_ts, q_ghb_ts, times

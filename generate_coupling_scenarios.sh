@@ -14,7 +14,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-OUTDIR="${1:-/Users/akap5486/Projects/groundwater/data/henry_data/grid_scenarios_20x40}"
+OUTDIR="${1:-/Users/arpitkapoor/Projects/groundwater/data/henry_data/grid_scenarios_dynamic_20x40}"
 LAG="${2:-1}"
 
 # Scenario-grid controls
@@ -39,7 +39,7 @@ FIXED_DIFFC="${FIXED_DIFFC:-0.57024}"
 # Run-variation dimensions (CSV lists)
 HK_VALUES="${HK_VALUES:-864.0}"
 POR_VALUES="${POR_VALUES:-0.35}"
-INFLOW_VALUES="${INFLOW_VALUES:-1.426,2.1385,2.851,4.2767,5.7024,7.1281}"
+INFLOW_VALUES="${INFLOW_VALUES:-1.426,2.1385,2.851,4.2767,5.7024}"
 GHB_HEAD_VALUES="${GHB_HEAD_VALUES:-1.00}"
 AL_VALUES="${AL_VALUES:-0.0}"
 AT_VALUES="${AT_VALUES:-0.0}"
@@ -64,6 +64,8 @@ SAVE_MODFLOW_FILES="${SAVE_MODFLOW_FILES:-0}"
 OVERWRITE="${OVERWRITE:-1}"
 WARM_START="${WARM_START:-0}"
 KEEP_RAW="${KEEP_RAW:-0}"
+DYNAMIC_INFLOW="${DYNAMIC_INFLOW:-0}"
+DYNAMIC_TIDES="${DYNAMIC_TIDES:-0}"
 
 RAW_OUTDIR="$OUTDIR/_raw_generation"
 
@@ -124,6 +126,15 @@ if [[ "$WARM_START" == "1" ]]; then
 else
   CMD+=(--no-warm-start)
 fi
+
+if [[ "$DYNAMIC_INFLOW" == "1" ]]; then
+  CMD+=(--dynamic-inflow)
+fi
+
+if [[ "$DYNAMIC_TIDES" == "1" ]]; then
+  CMD+=(--dynamic-tides)
+fi
+
 
 echo "Generating coupling/diffusion scenario grid"
 echo "  outdir:      $OUTDIR"
