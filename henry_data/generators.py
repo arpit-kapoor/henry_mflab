@@ -17,6 +17,7 @@ INPUT_CHANNEL_NAMES = (
     # "porosity",
     "flux_left_boundary",
     "ghb_flux_right_boundary",
+    "cinlet_right_boundary",
     "beta_c",
     "diffc",
 )
@@ -76,6 +77,13 @@ def _right_boundary_channel(value, nlay, ncol):
     return field
 
 
+def _right_boundary_channel_per_layer(values, nlay, ncol):
+    """Right-boundary channel where each layer has its own value."""
+    field = np.zeros((nlay, ncol), dtype=float)
+    field[:, -1] = np.asarray(values, dtype=float)
+    return field
+
+
 def _initial_head_field(nlay, ncol):
     # Keep head and concentration ICs explicit and separate for clarity.
     return np.full((nlay, ncol), float(STANDARD_INIT_HEAD), dtype=float)
@@ -96,7 +104,7 @@ def _prune_run_workspace(run_dir, keep_files):
             shutil.rmtree(child)
 
 
-def _build_window_tensors(head_ts, conc_ts, q_in_ts, q_ghb_ts, lag, nlay, ncol, params):
+def _build_window_tensors(head_ts, conc_ts, q_in_ts, q_ghb_ts, cinlet_ts, lag, nlay, ncol, params):
     t_indices = valid_window_indices(head_ts.shape[0], lag)
     n_windows = int(t_indices.size)
     if n_windows == 0:
@@ -132,6 +140,7 @@ def _build_window_tensors(head_ts, conc_ts, q_in_ts, q_ghb_ts, lag, nlay, ncol, 
         input_tensor[i, INPUT_CHANNEL_INDEX["head_t"]] = head_ts[t]
         input_tensor[i, INPUT_CHANNEL_INDEX["flux_left_boundary"]] = _left_boundary_channel(q_in_ts[t], nlay, ncol)
         input_tensor[i, INPUT_CHANNEL_INDEX["ghb_flux_right_boundary"]] = _right_boundary_channel(q_ghb_ts[t], nlay, ncol)
+        input_tensor[i, INPUT_CHANNEL_INDEX["cinlet_right_boundary"]] = _right_boundary_channel_per_layer(cinlet_ts[t], nlay, ncol)
 
         output_tensor[i, 0] = conc_ts[t_lag]
         output_tensor[i, 1] = head_ts[t_lag]
@@ -255,7 +264,7 @@ def generate_windowed_scenario_dataset(
 
             print(f"  [{run_index:04d}/{len(run_combinations):04d}] RUN  {run_tag}")
             try:
-                head_ts, conc_ts, q_in_ts, q_ghb_ts, times = build_and_run_henry(
+                head_ts, conc_ts, q_in_ts, q_ghb_ts, cinlet_ts, times = build_and_run_henry(
                     workspace=run_dir,
                     ncol=ncol,
                     nlay=nlay,
@@ -289,6 +298,7 @@ def generate_windowed_scenario_dataset(
                     conc_ts=conc_ts,
                     q_in_ts=q_in_ts,
                     q_ghb_ts=q_ghb_ts,
+                    cinlet_ts=cinlet_ts,
                     lag=lag,
                     nlay=nlay,
                     ncol=ncol,

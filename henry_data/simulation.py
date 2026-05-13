@@ -141,32 +141,46 @@ def build_and_run_henry(
         ghb_spd = [[(k, 0, ncol - 1), ghb_head, float(ghbcond[k]), cinlet] for k in range(nlay)]
         flopy.mf6.ModflowGwfghb(gwf, stress_period_data=ghb_spd, pname="GHB-1", auxiliary="CONCENTRATION")
     else:
-        # Define time-series data: [(Time, Head)]
+        # Define time-series data with dynamic cinlet per layer
         times = np.linspace(0, total_time, nstp[0])
-        
-        # Tidal amplitude of 0.5m around mean sea level (ghb_head), 
+
+        # Tidal amplitude of 0.5m around mean sea level (ghb_head),
         # with a 0.5-day (12-hour) tidal period
-        tidal_heads = ghb_head + 0.5 * np.cos(2 * np.pi * times / 0.5) 
-        ts_data = list(zip(times, tidal_heads))
+        tidal_heads = ghb_head + 0.5 * np.cos(2 * np.pi * times / 0.5)
 
-        # Map the "tide_head" string to the column where the head value normally goes
-        # Format: [Cell_ID, Head, Conductance, Concentration]
-        ghb_spd = {0: [[(k, 0, ncol - 1), "tide_head", float(ghbcond[k]), cinlet] for k in range(nlay)]}
+        # One concentration time series per layer: 35 kg/m3 when the tidal head
+        # is at or above the layer top (layer is submerged), 0 otherwise.
+        c_names = [f"c_lay{k}" for k in range(nlay)]
 
-        # Instantiate the GHB package
+        ts_data = []
+        for i, t in enumerate(times):
+            h_t = tidal_heads[i]
+            row = [t, h_t]
+            for k in range(nlay):
+                lay_top = top if k == 0 else botm[k - 1]
+                row.append(35.0 if h_t >= lay_top else 0.0)
+            ts_data.append(tuple(row))
+
+        # Columns 2 onwards are the per-layer concentrations at each time node.
+        cinlet_ts = np.array([row[2:] for row in ts_data])  # shape (nstp[0], nlay)
+
+        # Each layer references its own concentration name; head is shared
+        ghb_spd = {0: [[(k, 0, ncol - 1), "tide_head", float(ghbcond[k]), f"c_lay{k}"] for k in range(nlay)]}
+
         ghb = flopy.mf6.ModflowGwfghb(
-            gwf, 
-            stress_period_data=ghb_spd, 
-            pname="GHB-1", 
-            auxiliary="CONCENTRATION"
+            gwf,
+            stress_period_data=ghb_spd,
+            pname="GHB-1",
+            auxiliary="CONCENTRATION",
         )
 
-        # Initialize the Time-Series array for the GHB package
+        # Multi-column time series: first column is tide_head, remaining are
+        # per-layer concentrations. A single interpolation method applies to all.
         ghb.ts.initialize(
             filename="ghb_ts.ts",
             timeseries=ts_data,
-            time_series_namerecord="tide_head",
-            interpolation_methodrecord="linearend" 
+            time_series_namerecord=["tide_head"] + c_names,
+            interpolation_methodrecord=["linearend"] * (nlay + 1),
         )
 
 
@@ -256,6 +270,10 @@ def build_and_run_henry(
     conc_ts = cobj.get_alldata().squeeze()
     times = np.asarray(hobj.get_times(), dtype=float)
 
+    if not dynamic_tides:
+        # Broadcast scalar cinlet to every simulated time step and layer.
+        cinlet_ts = np.full((len(times), nlay), float(cinlet))  # shape (n_times, nlay)
+
     # Read the cell-by-cell budget file to extract the time series of flow rates for the well (WEL) and GHB boundaries.
     bobj = flopy.utils.CellBudgetFile(ws / "gwf.cbc")
 
@@ -267,6 +285,6 @@ def build_and_run_henry(
         q_ghb_ts = np.array([np.sum(stepdata['q']) for stepdata in bobj.get_data(text="GHB")])
 
     if return_timeseries:
-        return head_ts, conc_ts, q_in_ts, q_ghb_ts, times
+        return head_ts, conc_ts, q_in_ts, q_ghb_ts, cinlet_ts, times
 
-    return head_ts[-1], conc_ts[-1], q_in_ts[-1], q_ghb_ts[-1]
+    return head_ts[-1], conc_ts[-1], q_in_ts[-1], q_ghb_ts[-1], cinlet_ts[-1]
