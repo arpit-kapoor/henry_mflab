@@ -77,6 +77,8 @@ def build_parser():
     ap.add_argument("--dynamic-inflow", action="store_true", help="Use a dynamic inflow boundary condition and save its time series data.")
     ap.add_argument("--dynamic-tides", action="store_true", help="Use dynamic tidal boundary conditions and save their time series data.")
     
+    ap.add_argument("--add-storage", action="store_true", help="Add storage to the model and include it as a feature in the dataset.")
+
     return ap
 
 
@@ -130,6 +132,7 @@ def run(args):
         val_frac=args.val_frac,
         dynamic_inflow=args.dynamic_inflow,
         dynamic_tides=args.dynamic_tides,
+        add_storage=args.add_storage,
     )
 
 

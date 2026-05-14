@@ -14,7 +14,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-OUTDIR="${1:-/Users/$USER/Projects/groundwater/data/henry_data/grid_scenarios_dynamic_20x40}"
+OUTDIR="${1:-/Users/$USER/Projects/groundwater/data/henry_data/grid_scenarios_static_20x40}"
 LAG="${2:-1}"
 
 # Scenario-grid controls
@@ -64,8 +64,9 @@ SAVE_MODFLOW_FILES="${SAVE_MODFLOW_FILES:-0}"
 OVERWRITE="${OVERWRITE:-1}"
 WARM_START="${WARM_START:-0}"
 KEEP_RAW="${KEEP_RAW:-0}"
-DYNAMIC_INFLOW="${DYNAMIC_INFLOW:-1}"
-DYNAMIC_TIDES="${DYNAMIC_TIDES:-1}"
+DYNAMIC_INFLOW="${DYNAMIC_INFLOW:-0}"
+DYNAMIC_TIDES="${DYNAMIC_TIDES:-0}"
+ADD_STORAGE="${ADD_STORAGE:-0}"
 
 RAW_OUTDIR="$OUTDIR/_raw_generation"
 
@@ -133,6 +134,10 @@ fi
 
 if [[ "$DYNAMIC_TIDES" == "1" ]]; then
   CMD+=(--dynamic-tides)
+fi
+
+if [[ "$ADD_STORAGE" == "1" ]]; then
+  CMD+=(--add-storage)
 fi
 
 

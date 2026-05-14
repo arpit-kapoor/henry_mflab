@@ -181,6 +181,7 @@ def generate_windowed_scenario_dataset(
     val_frac,
     dynamic_inflow,
     dynamic_tides,
+    add_storage,
 ):
     outdir.mkdir(parents=True, exist_ok=True)
 
@@ -288,6 +289,7 @@ def generate_windowed_scenario_dataset(
                     exe_name=exe_name,
                     dynamic_inflow=dynamic_inflow,
                     dynamic_tides=dynamic_tides,
+                    add_storage=add_storage,
                 )
 
                 prev_head_final = np.asarray(head_ts[-1], dtype=float).copy()

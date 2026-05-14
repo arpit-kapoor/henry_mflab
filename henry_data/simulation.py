@@ -28,10 +28,13 @@ def build_and_run_henry(
     strt_conc=35.0,
     hk_field=None,
     vk_field=None,
+    ss=1e-3,
+    sy=0.15,
     return_timeseries=False,
     exe_name="mf6",
     dynamic_inflow=True,
     dynamic_tides=True,
+    add_storage=False,
 ):
     ws = pl.Path(workspace)
     ws.mkdir(parents=True, exist_ok=True)
@@ -125,13 +128,20 @@ def build_and_run_henry(
         save_specific_discharge=True,
     )
 
+    # Storage package — makes the flow model truly transient.
+    # iconvert=0 matches icelltype=0 (strictly confined); sy is defined but inactive.
+    if add_storage:
+        flopy.mf6.ModflowGwfsto(
+            gwf,
+            save_flows=True,
+            iconvert=0,
+            ss=ss,
+            sy=sy,
+            transient={0: True},
+        )
+
     # Buoyancy coupling: maps concentration from GWT to density effects in GWF.
     flopy.mf6.ModflowGwfbuy(gwf, packagedata=[(0, beta_c, 0.0, "gwt", "concentration")])
-
-    # # Right boundary (GHB): fixed head with conductance and seawater concentration.
-    # ghbcond = hk_arr[:, -1] * delv * delc / (0.5 * delr)
-    # ghb_spd = [[(k, 0, ncol - 1), ghb_head, float(ghbcond[k]), cinlet] for k in range(nlay)]
-    # flopy.mf6.ModflowGwfghb(gwf, stress_period_data=ghb_spd, pname="GHB-1", auxiliary="CONCENTRATION")
 
     # Calculate conductance (remains constant regardless of tides)
     ghbcond = hk_arr[:, -1] * delv * delc / (0.5 * delr)
