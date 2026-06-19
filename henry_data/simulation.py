@@ -155,8 +155,10 @@ def build_and_run_henry(
         times = np.linspace(0, total_time, nstp[0])
 
         # Tidal amplitude of 0.5m around mean sea level (ghb_head),
-        # with a 0.5-day (12-hour) tidal period
-        tidal_heads = ghb_head + 0.5 * np.cos(2 * np.pi * times / 0.5)
+        # with a high frequency period to create separation of scales
+        tidal_period = total_time / 10.0  # 10 cycles per simulation
+        tidal_heads = ghb_head + 0.5 * np.cos(2 * np.pi * times / tidal_period) + np.random.normal(0, 0.1, len(times))
+        tidal_heads = np.clip(tidal_heads, 0, 1.0)  # add small noise to avoid perfect periodicity
 
         # One concentration time series per layer: 35 kg/m3 when the tidal head
         # is at or above the layer top (layer is submerged), 0 otherwise.
@@ -201,7 +203,10 @@ def build_and_run_henry(
     else:
         # Define time-series data: [(Time, Q_in)]
         times = np.linspace(0, total_time, nstp[0])
-        q_in_series = inflow/nlay * (1 + 0.5 * np.sin(2 * np.pi * times / total_time)) + np.random.normal(0, 0.01, len(times))
+        # total inflow time
+        total_inflow_time = total_time / 5.0  # 5 cycles of inflow variation over the simulation
+        # Use a low-frequency, half-sine pattern to create a macroscopic shift in salt wedge
+        q_in_series = inflow/nlay * (1 + 0.8 * np.sin(np.pi * times / total_inflow_time)) + np.random.normal(0, 0.01, len(times))
         ts_data = list(zip(times, q_in_series))
 
         # Define stress period data for the well with a placeholder flow rate (will be overridden by time series).

@@ -10,7 +10,7 @@ set -euo pipefail
 # Example:
 #   ./generate_one_coupling_scenario.sh ./data_beta07_diff057 0.7 0.57024 1
 
-OUTDIR="${1:-/Users/akap5486/Projects/groundwater/data/henry_data/one_coupling_scenario}"
+OUTDIR="${1:-/Users/$USER/Projects/groundwater/data/henry_data/one_coupling_scenario}"
 LAG="${4:-1}"
 
 # Classic Henry benchmark values for beta_c and diffc are 0.7 and 0.57024, respectively.
@@ -33,7 +33,7 @@ DIFFC="${3:-0.57024}"
 HK_VALUES="${HK_VALUES:-864.0}"
 POR_VALUES="${POR_VALUES:-0.35}"
 INFLOW_VALUES="${INFLOW_VALUES:-5.7024,2.851}"
-GHB_HEAD_VALUES="${GHB_HEAD_VALUES:-1.0}"
+GHB_HEAD_VALUES="${GHB_HEAD_VALUES:-0.4}"
 AL_VALUES="${AL_VALUES:-0.0}"
 AT_VALUES="${AT_VALUES:-0.0}"
 CINLET="${CINLET:-35.0}"
@@ -41,8 +41,8 @@ CINLET="${CINLET:-35.0}"
 
 
 # Grid/time controls
-NCOL="${NCOL:-80}"
-NLAY="${NLAY:-40}"
+NCOL="${NCOL:-40}"
+NLAY="${NLAY:-20}"
 TOTAL_TIME="${TOTAL_TIME:-0.5}"
 NSTP="${NSTP:-100}"
 
@@ -55,10 +55,13 @@ VAL_FRAC="${VAL_FRAC:-0.15}"
 MF6_EXE="${MF6_EXE:-./.venv/bin/mf6}"
 MAX_RUNS_PER_SCENARIO="${MAX_RUNS_PER_SCENARIO:-}"
 SAVE_TIMESERIES="${SAVE_TIMESERIES:-0}"
-SAVE_MODFLOW_FILES="${SAVE_MODFLOW_FILES:-0}"
+SAVE_MODFLOW_FILES="${SAVE_MODFLOW_FILES:-1}"
 OVERWRITE="${OVERWRITE:-1}"
 WARM_START="${WARM_START:-0}"
 SCENARIO_PAIRS="${BETA_C}:${DIFFC}"
+DYNAMIC_INFLOW="${DYNAMIC_INFLOW:-1}"
+DYNAMIC_TIDES="${DYNAMIC_TIDES:-1}"
+ADD_STORAGE="${ADD_STORAGE:-1}"
 
 # Animation controls (post-generation)
 GENERATE_ANIMATION="${GENERATE_ANIMATION:-1}"
@@ -110,6 +113,18 @@ else
   CMD+=(--no-warm-start)
 fi
 
+if [[ "$DYNAMIC_INFLOW" == "1" ]]; then
+  CMD+=(--dynamic-inflow)
+fi
+
+if [[ "$DYNAMIC_TIDES" == "1" ]]; then
+  CMD+=(--dynamic-tides)
+fi
+
+if [[ "$ADD_STORAGE" == "1" ]]; then
+  CMD+=(--add-storage)
+fi
+
 echo "Running one coupling scenario dataset generation"
 echo "  outdir:    $OUTDIR"
 echo "  beta_c:    $BETA_C"
@@ -119,6 +134,9 @@ echo "  grid:      nlay=$NLAY ncol=$NCOL"
 echo "  time:      total_time=$TOTAL_TIME nstp=$NSTP"
 echo "  split:     seed=$SEED train=$TRAIN_FRAC val=$VAL_FRAC"
 echo "  warm_start:$WARM_START"
+echo "  dyn_inflow:$DYNAMIC_INFLOW"
+echo "  dyn_tides: $DYNAMIC_TIDES"
+echo "  storage:   $ADD_STORAGE"
 echo "  save mf6:  $SAVE_MODFLOW_FILES"
 echo "  mf6 exe:   $MF6_EXE"
 echo "  animate:   $GENERATE_ANIMATION"
