@@ -8,6 +8,27 @@ from .simulation import build_and_run_henry
 from .utils import build_splits, valid_window_indices
 
 
+def resolve_lag(lag_steps: int, lag_days: float | None, dt: float) -> int:
+    """Resolve the prediction lag to a number of time steps.
+
+    If *lag_days* is provided it takes priority and is converted to the nearest
+    positive integer number of steps using ``dt`` (days per step).
+    Otherwise, *lag_steps* is returned unchanged.
+
+    Parameters
+    ----------
+    lag_steps:
+        Fixed lag expressed as a count of time steps (fallback).
+    lag_days:
+        Desired lag in wall-clock days.  ``None`` defers to *lag_steps*.
+    dt:
+        Size of a single time step in days (``total_time / nstp``).
+    """
+    if lag_days is not None:
+        return max(1, round(lag_days / dt))
+    return lag_steps
+
+
 STANDARD_INIT_HEAD = 1.0
 STANDARD_INIT_CONCENTRATION = 35.0
 INPUT_CHANNEL_NAMES = (
@@ -104,43 +125,68 @@ def _prune_run_workspace(run_dir, keep_files):
             shutil.rmtree(child)
 
 
-def _build_window_tensors(head_ts, conc_ts, q_in_ts, q_ghb_ts, cinlet_ts, lag, nlay, ncol, params):
+def _build_window_tensors(
+    head_ts,
+    conc_ts,
+    q_in_ts,
+    q_ghb_ts,
+    cinlet_ts,
+    lag,
+    nlay,
+    ncol,
+    params,
+    times=None,
+    tidal_period=None,
+):
+    """Build (input, output) window tensors from full time-series arrays.
+
+    Parameters
+    ----------
+    times:
+        Array of MF6 output times [days].  Required when ``tidal_period`` is
+        provided to compute the optional tidal-phase channel.
+    tidal_period:
+        M2 semi-diurnal period [days].  When not ``None`` a ``tidal_phase``
+        channel (value in ``[0, 2π]``) is appended to the input tensor.
+    """
     t_indices = valid_window_indices(head_ts.shape[0], lag)
     n_windows = int(t_indices.size)
     if n_windows == 0:
         return None
 
-    cin = len(INPUT_CHANNEL_NAMES)
+    add_tidal_phase = (times is not None and tidal_period is not None)
+    channel_names = list(INPUT_CHANNEL_NAMES)
+    if add_tidal_phase:
+        channel_names = channel_names + ["tidal_phase"]
+    channel_index = {name: idx for idx, name in enumerate(channel_names)}
+
+    cin = len(channel_names)
     input_tensor = np.empty((n_windows, cin, nlay, ncol), dtype=np.float32)
     output_tensor = np.empty((n_windows, 2, nlay, ncol), dtype=np.float32)
 
-    # hk_field = _broadcast_channel(params["hk"], nlay, ncol)
-    # por_field = _broadcast_channel(params["por"], nlay, ncol)
-    # inflow_field = _left_boundary_channel(params["inflow"], nlay, ncol)
-    # ghb_field = _right_boundary_channel(params["ghb_head"], nlay, ncol)
     beta_field = _broadcast_channel(params["beta_c"], nlay, ncol)
     diffc_field = _broadcast_channel(params["diffc"], nlay, ncol)
 
     static_channel_fields = {
-        # "hk": hk_field,
-        # "porosity": por_field,
-        # "flux_left_boundary": flux_field,
-        # "ghb_flux_right_boundary": ghb_field,
         "beta_c": beta_field,
         "diffc": diffc_field,
     }
 
     # Fill channels that are constant across all windows once to avoid index-order mistakes.
     for channel_name, field in static_channel_fields.items():
-        input_tensor[:, INPUT_CHANNEL_INDEX[channel_name], :, :] = field
+        input_tensor[:, channel_index[channel_name], :, :] = field
 
     for i, t in enumerate(t_indices):
         t_lag = t + lag
-        input_tensor[i, INPUT_CHANNEL_INDEX["concentration_t"]] = conc_ts[t]
-        input_tensor[i, INPUT_CHANNEL_INDEX["head_t"]] = head_ts[t]
-        input_tensor[i, INPUT_CHANNEL_INDEX["flux_left_boundary"]] = _left_boundary_channel(q_in_ts[t], nlay, ncol)
-        input_tensor[i, INPUT_CHANNEL_INDEX["ghb_flux_right_boundary"]] = _right_boundary_channel(q_ghb_ts[t], nlay, ncol)
-        input_tensor[i, INPUT_CHANNEL_INDEX["cinlet_right_boundary"]] = _right_boundary_channel_per_layer(cinlet_ts[t], nlay, ncol)
+        input_tensor[i, channel_index["concentration_t"]] = conc_ts[t]
+        input_tensor[i, channel_index["head_t"]] = head_ts[t]
+        input_tensor[i, channel_index["flux_left_boundary"]] = _left_boundary_channel(q_in_ts[t], nlay, ncol)
+        input_tensor[i, channel_index["ghb_flux_right_boundary"]] = _right_boundary_channel(q_ghb_ts[t], nlay, ncol)
+        input_tensor[i, channel_index["cinlet_right_boundary"]] = _right_boundary_channel_per_layer(cinlet_ts[t], nlay, ncol)
+
+        if add_tidal_phase:
+            phase_val = float((2.0 * np.pi * times[t] / tidal_period) % (2.0 * np.pi))
+            input_tensor[i, channel_index["tidal_phase"], :, :] = phase_val
 
         output_tensor[i, 0] = conc_ts[t_lag]
         output_tensor[i, 1] = head_ts[t_lag]
@@ -148,6 +194,7 @@ def _build_window_tensors(head_ts, conc_ts, q_in_ts, q_ghb_ts, cinlet_ts, lag, n
     return {
         "input_tensor": input_tensor,
         "output_tensor": output_tensor,
+        "input_channel_names_used": channel_names,
         "t_index": t_indices,
         "t_lag_index": t_indices + lag,
     }
@@ -182,6 +229,26 @@ def generate_windowed_scenario_dataset(
     dynamic_inflow,
     dynamic_tides,
     add_storage,
+    # Warm-start spin-up parameters
+    spinup_time=10.0,
+    spinup_nstp=80,
+    # Lag in wall-clock days (overrides `lag` when not None)
+    lag_days=None,
+    # Tidal forcing parameters
+    tidal_amplitude=0.5,
+    spring_neap_amp=0.3,
+    tidal_period=0.517,
+    spring_neap_period=14.77,
+    spring_neap_phase=3.14159,
+    tidal_noise_std=0.02,
+    slr_rate=0.0,
+    # Freshwater inflow parameters
+    inflow_seasonal_amp=0.5,
+    inflow_event_amp=0.3,
+    inflow_event_period=7.0,
+    inflow_trend_amp=0.0,
+    # Optional tidal-phase input channel
+    add_tidal_phase=False,
 ):
     outdir.mkdir(parents=True, exist_ok=True)
 
@@ -189,6 +256,10 @@ def generate_windowed_scenario_dataset(
         raise ValueError("hk sweep is incompatible with --kappa-file; provide one hk value")
     if vk_field is not None and len(hk_values) != 1:
         raise ValueError("vk from kappa file is incompatible with hk sweep")
+
+    # Resolve lag: lag_days takes priority over lag (in steps) when provided.
+    dt = total_time / nstp  # time step size in days
+    lag = resolve_lag(lag, lag_days, dt)
 
     global_window_ids = []
     scenarios_summary = []
@@ -265,12 +336,14 @@ def generate_windowed_scenario_dataset(
 
             print(f"  [{run_index:04d}/{len(run_combinations):04d}] RUN  {run_tag}")
             try:
-                head_ts, conc_ts, q_in_ts, q_ghb_ts, cinlet_ts, times = build_and_run_henry(
-                    workspace=run_dir,
+                # ----------------------------------------------------------
+                # Two-pass warm-start: run a short spin-up first so that the
+                # main simulation begins from a quasi-periodic tidal state
+                # rather than an arbitrary uniform initial condition.
+                # ----------------------------------------------------------
+                common_sim_kwargs = dict(
                     ncol=ncol,
                     nlay=nlay,
-                    total_time=total_time,
-                    nstp=nstp,
                     cinlet=params["cinlet"],
                     por=params["por"],
                     hk=params["hk"],
@@ -281,15 +354,47 @@ def generate_windowed_scenario_dataset(
                     inflow=params["inflow"],
                     ghb_head=params["ghb_head"],
                     beta_c=params["beta_c"],
-                    strt_head=strt_head,
-                    strt_conc=strt_conc,
                     hk_field=hk_field,
                     vk_field=vk_field,
-                    return_timeseries=True,
                     exe_name=exe_name,
                     dynamic_inflow=dynamic_inflow,
                     dynamic_tides=dynamic_tides,
                     add_storage=add_storage,
+                    tidal_amplitude=tidal_amplitude,
+                    spring_neap_amp=spring_neap_amp,
+                    tidal_period=tidal_period,
+                    spring_neap_period=spring_neap_period,
+                    spring_neap_phase=spring_neap_phase,
+                    tidal_noise_std=tidal_noise_std,
+                    slr_rate=slr_rate,
+                    inflow_seasonal_amp=inflow_seasonal_amp,
+                    inflow_event_amp=inflow_event_amp,
+                    inflow_event_period=inflow_event_period,
+                    inflow_trend_amp=inflow_trend_amp,
+                )
+
+                spinup_dir = run_dir / "_spinup"
+                print(f"    spin-up ({spinup_time} days, {spinup_nstp} steps) ...")
+                spinup_head, spinup_conc, *_ = build_and_run_henry(
+                    workspace=spinup_dir,
+                    total_time=spinup_time,
+                    nstp=spinup_nstp,
+                    strt_head=strt_head,
+                    strt_conc=strt_conc,
+                    return_timeseries=False,
+                    **common_sim_kwargs,
+                )
+                shutil.rmtree(spinup_dir, ignore_errors=True)
+
+                print(f"    main run ({total_time} days, {nstp} steps) ...")
+                head_ts, conc_ts, q_in_ts, q_ghb_ts, cinlet_ts, times = build_and_run_henry(
+                    workspace=run_dir,
+                    total_time=total_time,
+                    nstp=nstp,
+                    strt_head=spinup_head,
+                    strt_conc=spinup_conc,
+                    return_timeseries=True,
+                    **common_sim_kwargs,
                 )
 
                 prev_head_final = np.asarray(head_ts[-1], dtype=float).copy()
@@ -305,6 +410,8 @@ def generate_windowed_scenario_dataset(
                     nlay=nlay,
                     ncol=ncol,
                     params=params,
+                    times=times if add_tidal_phase else None,
+                    tidal_period=tidal_period if add_tidal_phase else None,
                 )
                 if windowed is None:
                     raise ValueError(
@@ -320,17 +427,21 @@ def generate_windowed_scenario_dataset(
                 payload = {
                     "input_tensor": windowed["input_tensor"],
                     "output_tensor": windowed["output_tensor"],
-                    "input_channel_names": np.asarray(INPUT_CHANNEL_NAMES),
+                    "input_channel_names": np.asarray(windowed["input_channel_names_used"]),
                     "t_index": windowed["t_index"],
                     "t_lag_index": windowed["t_lag_index"],
                     "time_t": times[windowed["t_index"]],
                     "time_t_lag": times[windowed["t_lag_index"]],
                     "window_ids": np.asarray(window_ids),
                     "lag": int(lag),
+                    "lag_days": float(lag * dt),
+                    "dt": float(dt),
                     "ncol": ncol,
                     "nlay": nlay,
                     "total_time": total_time,
                     "nstp": nstp,
+                    "spinup_time": float(spinup_time),
+                    "spinup_nstp": int(spinup_nstp),
                     **params,
                 }
                 if save_timeseries:
@@ -382,6 +493,8 @@ def generate_windowed_scenario_dataset(
             "beta_c": float(beta_c),
             "diffc": float(diffc),
             "lag": int(lag),
+            "lag_days": float(lag * dt),
+            "dt": float(dt),
             "n_total_runs": len(run_combinations),
             "n_ok_runs": sum(r["status"] == "ok" for r in scenario_runs),
             "n_skipped_runs": sum(r["status"] == "skipped" for r in scenario_runs),
@@ -414,15 +527,35 @@ def generate_windowed_scenario_dataset(
         "workflow": "windowed_scenario_dataset",
         "initialization": {
             "warm_start": bool(warm_start),
+            "spinup_time": float(spinup_time),
+            "spinup_nstp": int(spinup_nstp),
             "fallback_head": float(STANDARD_INIT_HEAD),
             "fallback_concentration": float(STANDARD_INIT_CONCENTRATION),
-            "notes": "GWF and GWT initial conditions use separate explicit constants.",
+            "notes": "Each run is preceded by a spin-up pass whose final state is used as IC.",
+        },
+        "tidal_forcing": {
+            "tidal_amplitude": float(tidal_amplitude),
+            "spring_neap_amp": float(spring_neap_amp),
+            "tidal_period": float(tidal_period),
+            "spring_neap_period": float(spring_neap_period),
+            "spring_neap_phase": float(spring_neap_phase),
+            "tidal_noise_std": float(tidal_noise_std),
+            "slr_rate": float(slr_rate),
+        },
+        "inflow_forcing": {
+            "inflow_seasonal_amp": float(inflow_seasonal_amp),
+            "inflow_event_amp": float(inflow_event_amp),
+            "inflow_event_period": float(inflow_event_period),
+            "inflow_trend_amp": float(inflow_trend_amp),
         },
         "artifacts": {
             "save_modflow_files": bool(save_modflow_files),
             "required_run_files": sorted(REQUIRED_RUN_FILES),
         },
         "lag": int(lag),
+        "lag_days": float(lag * dt),
+        "dt": float(dt),
+        "add_tidal_phase": bool(add_tidal_phase),
         "train_frac": train_frac,
         "val_frac": val_frac,
         "n_scenarios": len(scenario_pairs),

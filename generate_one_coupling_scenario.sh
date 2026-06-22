@@ -43,8 +43,28 @@ CINLET="${CINLET:-35.0}"
 # Grid/time controls
 NCOL="${NCOL:-40}"
 NLAY="${NLAY:-20}"
-TOTAL_TIME="${TOTAL_TIME:-0.5}"
-NSTP="${NSTP:-100}"
+TOTAL_TIME="${TOTAL_TIME:-30}"
+NSTP="${NSTP:-240}"
+
+# Spin-up controls (warm-start pre-run before the main simulation)
+SPINUP_TIME="${SPINUP_TIME:-10}"
+SPINUP_NSTP="${SPINUP_NSTP:-80}"
+
+# Tidal forcing parameters
+# Reduced from 0.5/0.3 to match real island data: neap ±0.05m, spring ±0.25m around MSL.
+TIDAL_AMPLITUDE="${TIDAL_AMPLITUDE:-0.15}"
+SPRING_NEAP_AMP="${SPRING_NEAP_AMP:-0.10}"
+# Phase offset in radians: pi (3.14159) = start at neap so amplitude grows to spring around day 7.
+# Use 0 to start at spring (old behaviour). Neap-start matches real coastal tidal records better.
+SPRING_NEAP_PHASE="${SPRING_NEAP_PHASE:-3.14159}"
+# Sea-level rise [m/day]: 0.003 gives +0.09 m over 30 days (exaggerated but detectable)
+SLR_RATE="${SLR_RATE:-0.003}"
+
+# Freshwater inflow trend: -0.4 cuts inflow by 40% of mean by end of run (sustained drying)
+INFLOW_TREND_AMP="${INFLOW_TREND_AMP:--0.4}"
+
+# Prediction lag (in wall-clock days; overrides --lag when set)
+LAG_DAYS="${LAG_DAYS:-1}"
 
 # Dataset split controls
 SEED="${SEED:-42}"
@@ -79,6 +99,7 @@ CMD=(
   --mf6-exe "$MF6_EXE"
   --scenario-pairs "$SCENARIO_PAIRS"
   --lag "$LAG"
+  --lag-days "$LAG_DAYS"
   --hk-values "$HK_VALUES"
   --por-values "$POR_VALUES"
   --al-values "$AL_VALUES"
@@ -89,6 +110,13 @@ CMD=(
   --seed "$SEED"
   --train-frac "$TRAIN_FRAC"
   --val-frac "$VAL_FRAC"
+  --spinup-time "$SPINUP_TIME"
+  --spinup-nstp "$SPINUP_NSTP"
+  --tidal-amplitude "$TIDAL_AMPLITUDE"
+  --spring-neap-amp "$SPRING_NEAP_AMP"
+  --spring-neap-phase "$SPRING_NEAP_PHASE"
+  --slr-rate "$SLR_RATE"
+  --inflow-trend-amp "$INFLOW_TREND_AMP"
 )
 
 if [[ -n "$MAX_RUNS_PER_SCENARIO" ]]; then
@@ -126,21 +154,25 @@ if [[ "$ADD_STORAGE" == "1" ]]; then
 fi
 
 echo "Running one coupling scenario dataset generation"
-echo "  outdir:    $OUTDIR"
-echo "  beta_c:    $BETA_C"
-echo "  diffc:     $DIFFC"
-echo "  lag:       $LAG"
-echo "  grid:      nlay=$NLAY ncol=$NCOL"
-echo "  time:      total_time=$TOTAL_TIME nstp=$NSTP"
-echo "  split:     seed=$SEED train=$TRAIN_FRAC val=$VAL_FRAC"
-echo "  warm_start:$WARM_START"
-echo "  dyn_inflow:$DYNAMIC_INFLOW"
-echo "  dyn_tides: $DYNAMIC_TIDES"
-echo "  storage:   $ADD_STORAGE"
-echo "  save mf6:  $SAVE_MODFLOW_FILES"
-echo "  mf6 exe:   $MF6_EXE"
-echo "  animate:   $GENERATE_ANIMATION"
-echo "  command:   ${CMD[*]}"
+echo "  outdir:      $OUTDIR"
+echo "  beta_c:      $BETA_C"
+echo "  diffc:       $DIFFC"
+echo "  lag:         $LAG"
+echo "  lag_days:    $LAG_DAYS"
+echo "  grid:        nlay=$NLAY ncol=$NCOL"
+echo "  time:        total_time=$TOTAL_TIME nstp=$NSTP"
+echo "  spinup:      time=$SPINUP_TIME nstp=$SPINUP_NSTP"
+echo "  tidal:       amp=$TIDAL_AMPLITUDE spring_neap=$SPRING_NEAP_AMP slr_rate=$SLR_RATE"
+echo "  inflow:      trend_amp=$INFLOW_TREND_AMP"
+echo "  split:       seed=$SEED train=$TRAIN_FRAC val=$VAL_FRAC"
+echo "  warm_start:  $WARM_START"
+echo "  dyn_inflow:  $DYNAMIC_INFLOW"
+echo "  dyn_tides:   $DYNAMIC_TIDES"
+echo "  storage:     $ADD_STORAGE"
+echo "  save mf6:    $SAVE_MODFLOW_FILES"
+echo "  mf6 exe:     $MF6_EXE"
+echo "  animate:     $GENERATE_ANIMATION"
+echo "  command:     ${CMD[*]}"
 
 "${CMD[@]}"
 

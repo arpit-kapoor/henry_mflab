@@ -12,8 +12,8 @@ def build_and_run_henry(
     nlay=40,
     Lx=2.0,
     Lz=1.0,
-    total_time=0.5,
-    nstp=500,
+    total_time=30.0,
+    nstp=240,
     cinlet=35.0,
     por=0.35,
     hk=864.0,
@@ -35,7 +35,67 @@ def build_and_run_henry(
     dynamic_inflow=True,
     dynamic_tides=True,
     add_storage=False,
+    # Tidal forcing parameters (right / sea boundary)
+    tidal_amplitude=0.15,      # Mean M2 tidal amplitude [m]  (was 0.5; real data ~0.05-0.35m)
+    spring_neap_amp=0.10,      # Spring-neap modulation amplitude [m]  (was 0.3)
+    tidal_period=0.517,        # M2 semi-diurnal period [days] (~12.42 h)
+    spring_neap_period=14.77,  # Spring-neap beat period [days]
+    spring_neap_phase=3.14159, # Phase offset [rad]; π → starts at neap (min amplitude)
+    tidal_noise_std=0.01,      # Std of Gaussian noise added to tidal head [m]  (was 0.02)
+    slr_rate=0.0,              # Sea-level rise rate [m/day]; 0 = no trend
+    # Freshwater inflow parameters (left boundary)
+    inflow_seasonal_amp=0.5,   # Seasonal half-sine amplitude factor (fraction of mean)
+    inflow_event_amp=0.3,      # Short-term event amplitude factor (fraction of mean)
+    inflow_event_period=7.0,   # Event recurrence period [days]
+    inflow_trend_amp=0.0,      # Monotone trend amplitude (fraction of mean); negative = drying
 ):
+    """Build and run a MODFLOW 6 Henry saltwater-intrusion problem.
+
+    The right (sea) boundary uses a General-Head Boundary (GHB) whose head
+    follows a realistic M2 semi-diurnal tidal signal modulated by a spring-neap
+    envelope.  The left boundary uses a Well (WEL) package with a multi-scale
+    freshwater inflow composed of a seasonal trend and episodic events.
+
+    Parameters
+    ----------
+    total_time : float
+        Total simulation duration in days (default 30).
+    nstp : int
+        Number of uniform time steps (default 240 → Δt = 0.125 day ≈ 3 h,
+        resolving ~4 steps per semi-diurnal tidal cycle).
+    tidal_amplitude : float
+        Mean M2 tidal amplitude around ``ghb_head`` [m].
+    spring_neap_amp : float
+        Additional amplitude superimposed by the fortnightly spring-neap cycle [m].
+    tidal_period : float
+        Semi-diurnal tidal period [days]. Default 0.517 (≈ 12.42 h, M2 tide).
+    spring_neap_period : float
+        Spring-neap modulation period [days]. Default 14.77.
+    spring_neap_phase : float
+        Phase offset of the spring-neap envelope [radians].  Default π starts the
+        simulation at neap tide (minimum amplitude), so the envelope grows to spring
+        around t = T_sn/2 ≈ 7.4 days then returns to neap — matching real tidal
+        records that start quiet and build to a spring-tide peak.  Use 0 to start
+        at spring (maximum amplitude) as in the classic formulation.
+    tidal_noise_std : float
+        Standard deviation of Gaussian noise added to each tidal head node [m].
+    slr_rate : float
+        Sea-level rise rate [m/day] added as a linear drift to the mean tidal
+        baseline.  0 (default) = no rise.  A value of 0.003 gives +0.09 m over
+        30 days, clearly visible as a slow salt-wedge advance.
+    inflow_seasonal_amp : float
+        Amplitude of seasonal (half-sine) freshwater inflow variation as a
+        fraction of the mean per-layer inflow.
+    inflow_event_amp : float
+        Amplitude of episodic rainfall events as a fraction of mean per-layer inflow.
+    inflow_event_period : float
+        Recurrence period of episodic rainfall events [days].
+    inflow_trend_amp : float
+        Monotone inflow trend expressed as a fraction of mean per-layer inflow.
+        Negative = drying (inflow decreases linearly to ``inflow_trend_amp * q_mean``
+        by end of run).  Positive = wetting.  0 (default) = no trend.
+        Example: ``-0.4`` reduces inflow by 40 % of mean over the simulation.
+    """
     ws = pl.Path(workspace)
     ws.mkdir(parents=True, exist_ok=True)
 
@@ -54,9 +114,12 @@ def build_and_run_henry(
     if ghb_head is None:
         ghb_head = top
     botm = [Lz - delv * (k + 1) for k in range(nlay)]
+
+    # Capture the scalar nstp before it is wrapped into a list for flopy.
+    _nstp = int(nstp)
     perlen = [total_time]
     nper = 1
-    nstp = [nstp]
+    nstp_list = [_nstp]
     tsmult = [1.0]
 
     # Create a MODFLOW 6 simulation container (workspace + executable).
@@ -64,7 +127,7 @@ def build_and_run_henry(
 
     # Define time discretization (single stress period split into nstp time steps).
     flopy.mf6.ModflowTdis(
-        sim, time_units="DAYS", nper=nper, perioddata=list(zip(perlen, nstp, tsmult))
+        sim, time_units="DAYS", nper=nper, perioddata=list(zip(perlen, nstp_list, tsmult))
     )
 
     nouter, ninner = 100, 300
@@ -147,25 +210,42 @@ def build_and_run_henry(
     ghbcond = hk_arr[:, -1] * delv * delc / (0.5 * delr)
 
     if not dynamic_tides:
-        # Original steady-state GHB
+        # Original steady-state GHB: constant head and concentration.
         ghb_spd = [[(k, 0, ncol - 1), ghb_head, float(ghbcond[k]), cinlet] for k in range(nlay)]
         flopy.mf6.ModflowGwfghb(gwf, stress_period_data=ghb_spd, pname="GHB-1", auxiliary="CONCENTRATION")
     else:
-        # Define time-series data with dynamic cinlet per layer
-        times = np.linspace(0, total_time, nstp[0])
+        # ---------------------------------------------------------------
+        # Realistic tidal forcing on the right (sea) boundary.
+        #
+        # Time-series nodes: _nstp+1 points spanning [0, total_time].
+        # Using one extra node ensures the MF6 time-series file covers the
+        # final output time (total_time) without extrapolation gaps.
+        # Node index 0  → t = 0       (start of stress period)
+        # Node index k  → t = k*dt    (end of time step k)
+        # ---------------------------------------------------------------
+        t_forcing = np.linspace(0.0, total_time, _nstp + 1)
 
-        # Tidal amplitude of 0.5m around mean sea level (ghb_head),
-        # with a high frequency period to create separation of scales
-        tidal_period = total_time / 10.0  # 10 cycles per simulation
-        tidal_heads = ghb_head + 0.5 * np.cos(2 * np.pi * times / tidal_period) + np.random.normal(0, 0.1, len(times))
-        tidal_heads = np.clip(tidal_heads, 0, 1.0)  # add small noise to avoid perfect periodicity
+        # Composite tidal head signal:
+        #   M2 semi-diurnal carrier modulated by a fortnightly spring-neap envelope,
+        #   superimposed on a linearly rising mean sea level (sea-level rise).
+        #   Amplitude ranges from (tidal_amplitude - spring_neap_amp) at neap tide
+        #   to (tidal_amplitude + spring_neap_amp) at spring tide.
+        mean_sl   = ghb_head + slr_rate * t_forcing
+        raw_tidal = (
+            mean_sl
+            + (tidal_amplitude + spring_neap_amp * np.cos(2.0 * np.pi * t_forcing / spring_neap_period + spring_neap_phase))
+            * np.cos(2.0 * np.pi * t_forcing / tidal_period)
+            + np.random.normal(0.0, tidal_noise_std, len(t_forcing))
+        )
+        tidal_heads = np.clip(raw_tidal, 0.0, top)
 
-        # One concentration time series per layer: 35 kg/m3 when the tidal head
-        # is at or above the layer top (layer is submerged), 0 otherwise.
+        # Per-layer concentration time series:
+        #   35 kg/m³ when tidal head reaches or exceeds the layer top (submerged),
+        #   0 otherwise (layer exposed to fresh water).
         c_names = [f"c_lay{k}" for k in range(nlay)]
 
         ts_data = []
-        for i, t in enumerate(times):
+        for i, t in enumerate(t_forcing):
             h_t = tidal_heads[i]
             row = [t, h_t]
             for k in range(nlay):
@@ -173,11 +253,16 @@ def build_and_run_henry(
                 row.append(35.0 if h_t >= lay_top else 0.0)
             ts_data.append(tuple(row))
 
-        # Columns 2 onwards are the per-layer concentrations at each time node.
-        cinlet_ts = np.array([row[2:] for row in ts_data])  # shape (nstp[0], nlay)
+        # cinlet_raw: shape (_nstp+1, nlay), one row per forcing node.
+        cinlet_raw = np.array([row[2:] for row in ts_data])
 
-        # Each layer references its own concentration name; head is shared
-        ghb_spd = {0: [[(k, 0, ncol - 1), "tide_head", float(ghbcond[k]), f"c_lay{k}"] for k in range(nlay)]}
+        # Each layer references its own concentration name; head is shared.
+        ghb_spd = {
+            0: [
+                [(k, 0, ncol - 1), "tide_head", float(ghbcond[k]), f"c_lay{k}"]
+                for k in range(nlay)
+            ]
+        }
 
         ghb = flopy.mf6.ModflowGwfghb(
             gwf,
@@ -187,7 +272,8 @@ def build_and_run_henry(
         )
 
         # Multi-column time series: first column is tide_head, remaining are
-        # per-layer concentrations. A single interpolation method applies to all.
+        # per-layer concentrations.  linearend interpolation preserves the
+        # smooth sinusoidal shape of the tidal signal.
         ghb.ts.initialize(
             filename="ghb_ts.ts",
             timeseries=ts_data,
@@ -195,35 +281,57 @@ def build_and_run_henry(
             interpolation_methodrecord=["linearend"] * (nlay + 1),
         )
 
-
     if not dynamic_inflow:
-        # Left boundary (WEL): distributed freshwater inflow with zero salinity.
+        # Left boundary (WEL): constant distributed freshwater inflow, zero salinity.
         wel_spd = [[(k, 0, 0), inflow / nlay, 0.0] for k in range(nlay)]
         flopy.mf6.ModflowGwfwel(gwf, stress_period_data=wel_spd, pname="WEL-1", auxiliary="CONCENTRATION")
     else:
-        # Define time-series data: [(Time, Q_in)]
-        times = np.linspace(0, total_time, nstp[0])
-        # total inflow time
-        total_inflow_time = total_time / 5.0  # 5 cycles of inflow variation over the simulation
-        # Use a low-frequency, half-sine pattern to create a macroscopic shift in salt wedge
-        q_in_series = inflow/nlay * (1 + 0.8 * np.sin(np.pi * times / total_inflow_time)) + np.random.normal(0, 0.01, len(times))
-        ts_data = list(zip(times, q_in_series))
+        # ---------------------------------------------------------------
+        # Multi-scale freshwater inflow on the left boundary.
+        #
+        # Two superimposed components:
+        #   1. Seasonal: half-sine ramp over the full simulation window,
+        #      mimicking a wet → dry → wet seasonal cycle.
+        #   2. Episodic events: absolute-sine pulses at a weekly recurrence,
+        #      representing individual rainfall/runoff events.
+        # ---------------------------------------------------------------
+        t_forcing_q = np.linspace(0.0, total_time, _nstp + 1)
+        q_mean = inflow / nlay
 
-        # Define stress period data for the well with a placeholder flow rate (will be overridden by time series).
-        wel_spd = {0:[[(k, 0, 0), "Q_in", 0.0] for k in range(nlay)]}
+        # Three superimposed components:
+        #   1. Seasonal: symmetric half-sine ramp (wet→dry→wet), zero net drift.
+        #   2. Episodic events: absolute-sine pulses at weekly recurrence.
+        #   3. Monotone trend: linear drift from 0 to inflow_trend_amp × q_mean.
+        #      Negative value = sustained drying (salt wedge advances long-term).
+        q_seasonal = q_mean * (1.0 + inflow_seasonal_amp * np.sin(np.pi * t_forcing_q / total_time))
+        q_event    = q_mean * inflow_event_amp * np.abs(np.sin(np.pi * t_forcing_q / inflow_event_period))
+        q_drift    = q_mean * inflow_trend_amp * (t_forcing_q / total_time)   # 0 at t=0, full at t=T
+        q_in_series = (
+            q_seasonal
+            + q_event
+            + q_drift
+            + np.random.normal(0.0, 0.005 * q_mean, len(t_forcing_q))
+        )
+        # Enforce a positive minimum inflow so the well never becomes an abstraction.
+        q_in_series = np.clip(q_in_series, 0.01 * q_mean, None)
+
+        ts_data_q = list(zip(t_forcing_q.tolist(), q_in_series.tolist()))
+
+        # Stress period data references the "Q_in" time-series name.
+        wel_spd = {0: [[(k, 0, 0), "Q_in", 0.0] for k in range(nlay)]}
         wel = flopy.mf6.ModflowGwfwel(
             gwf,
             stress_period_data=wel_spd,
             pname="WEL-1",
-            auxiliary="CONCENTRATION"
+            auxiliary="CONCENTRATION",
         )
 
-        # Initialize the Time-Series array for the well flow rate (Q_in).
+        # linearend gives a smooth, realistic inflow hydrograph.
         wel.ts.initialize(
             filename="wel_ts.ts",
-            timeseries=ts_data,
+            timeseries=ts_data_q,
             time_series_namerecord="Q_in",
-            interpolation_methodrecord="stepwise"
+            interpolation_methodrecord="linearend",
         )
 
     # Save and print flow outputs.
@@ -284,20 +392,29 @@ def build_and_run_henry(
     head_ts = hobj.get_alldata().squeeze()
     conc_ts = cobj.get_alldata().squeeze()
     times = np.asarray(hobj.get_times(), dtype=float)
+    n_out = len(times)  # number of MF6 output records (= _nstp)
 
+    # Align forcing arrays to MF6 output times.
+    # Forcing nodes 0..n_out cover t=0 to t=total_time; MF6 outputs correspond
+    # to the END of each time step (nodes 1..n_out), so we skip node 0.
     if not dynamic_tides:
         # Broadcast scalar cinlet to every simulated time step and layer.
-        cinlet_ts = np.full((len(times), nlay), float(cinlet))  # shape (n_times, nlay)
+        cinlet_ts = np.full((n_out, nlay), float(cinlet))  # shape (n_out, nlay)
+    else:
+        # Sub-sample from the (_nstp+1)-node forcing arrays to n_out MF6 records.
+        cinlet_ts = cinlet_raw[1 : n_out + 1]   # shape (n_out, nlay)
 
-    # Read the cell-by-cell budget file to extract the time series of flow rates for the well (WEL) and GHB boundaries.
+    # Read the cell-by-cell budget file to extract boundary flow rates.
     bobj = flopy.utils.CellBudgetFile(ws / "gwf.cbc")
 
-    # Extract flow rates for the well (WEL) and GHB boundaries across all time steps.
-    q_in_ts = np.array([np.sum(stepdata['q']) for stepdata in bobj.get_data(text="WEL")])
+    # Total well flux summed across all cells (positive = inflow).
+    q_in_ts = np.array([np.sum(stepdata["q"]) for stepdata in bobj.get_data(text="WEL")])
+
     if dynamic_tides:
-        q_ghb_ts = tidal_heads
-    else: 
-        q_ghb_ts = np.array([np.sum(stepdata['q']) for stepdata in bobj.get_data(text="GHB")])
+        # Return the tidal head at MF6 output times as the right-boundary feature.
+        q_ghb_ts = tidal_heads[1 : n_out + 1]   # shape (n_out,)
+    else:
+        q_ghb_ts = np.array([np.sum(stepdata["q"]) for stepdata in bobj.get_data(text="GHB")])
 
     if return_timeseries:
         return head_ts, conc_ts, q_in_ts, q_ghb_ts, cinlet_ts, times
