@@ -150,8 +150,8 @@ def animate_henry(
     print(f"Data shape: {ntimes} time steps, {nlay} layers, {ncol} columns")
     
     # Create spatial coordinates (assuming domain from run_henry.py defaults)
-    Lx = 2.0  # horizontal extent (m)
-    Lz = 1.0  # vertical extent (m)
+    Lx = 8.0  # horizontal extent (m)
+    Lz = 4.0  # vertical extent (m)
     x = np.linspace(0, Lx, ncol)
     z = np.linspace(Lz, 0, nlay)
     X, Z = np.meshgrid(x, z)

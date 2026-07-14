@@ -43,11 +43,14 @@ def build_and_run_henry(
     spring_neap_phase=3.14159, # Phase offset [rad]; π → starts at neap (min amplitude)
     tidal_noise_std=0.01,      # Std of Gaussian noise added to tidal head [m]  (was 0.02)
     slr_rate=0.0,              # Sea-level rise rate [m/day]; 0 = no trend
-    # Freshwater inflow parameters (left boundary)
-    inflow_seasonal_amp=0.5,   # Seasonal half-sine amplitude factor (fraction of mean)
-    inflow_event_amp=0.3,      # Short-term event amplitude factor (fraction of mean)
-    inflow_event_period=7.0,   # Event recurrence period [days]
-    inflow_trend_amp=0.0,      # Monotone trend amplitude (fraction of mean); negative = drying
+    # Freshwater inflow parameters (left boundary) — stochastic shot-noise model
+    storm_rate=1.0,        # Poisson storm arrival rate [storms/day]
+    storm_amp_mean=1.0,    # Mean storm peak amplitude as fraction of q_mean (log-normal mu)
+    storm_amp_std=0.5,     # Std of storm peak amplitude fraction (log-normal sigma)
+    recession_k=3.0,       # Recession constant [days]; larger = slower baseflow decay
+    ar1_phi=0.85,          # AR(1) autocorrelation coefficient in (0, 1)
+    ar1_sigma=0.05,        # AR(1) white-noise std [fraction of q_mean]
+    inflow_trend_amp=0.0,  # Monotone trend amplitude (fraction of mean); negative = drying
 ):
     """Build and run a MODFLOW 6 Henry saltwater-intrusion problem.
 
@@ -83,13 +86,27 @@ def build_and_run_henry(
         Sea-level rise rate [m/day] added as a linear drift to the mean tidal
         baseline.  0 (default) = no rise.  A value of 0.003 gives +0.09 m over
         30 days, clearly visible as a slow salt-wedge advance.
-    inflow_seasonal_amp : float
-        Amplitude of seasonal (half-sine) freshwater inflow variation as a
-        fraction of the mean per-layer inflow.
-    inflow_event_amp : float
-        Amplitude of episodic rainfall events as a fraction of mean per-layer inflow.
-    inflow_event_period : float
-        Recurrence period of episodic rainfall events [days].
+    storm_rate : float
+        Poisson storm arrival rate [storms/day].  Average inter-storm interval
+        is 1/storm_rate days.  Default 1.0 (one storm per day).
+    storm_amp_mean : float
+        Mean storm peak amplitude expressed as a fraction of the mean per-layer
+        inflow ``q_mean``.  Passed as the mu parameter of the underlying normal
+        before exponentiation (log-normal).  Default 1.0.
+    storm_amp_std : float
+        Std of the storm peak amplitude fraction (log-normal sigma).  Larger
+        values produce more variable storm sizes.  Default 0.5.
+    recession_k : float
+        Aquifer recession constant [days].  Each storm pulse decays as
+        ``A_i * exp(-(t - t_i) / recession_k)``.  Larger values produce slower,
+        more prolonged baseflow recessions.  Default 3.0 days.
+    ar1_phi : float
+        AR(1) autocorrelation coefficient in (0, 1).  Controls the memory
+        (smoothness) of the background noise.  Values near 1 produce slow-
+        varying noise; values near 0 produce nearly white noise.  Default 0.85.
+    ar1_sigma : float
+        Standard deviation of the AR(1) white-noise innovations as a fraction
+        of ``q_mean``.  Default 0.05 (5 % of mean inflow).
     inflow_trend_amp : float
         Monotone inflow trend expressed as a fraction of mean per-layer inflow.
         Negative = drying (inflow decreases linearly to ``inflow_trend_amp * q_mean``
@@ -253,6 +270,9 @@ def build_and_run_henry(
                 row.append(35.0 if h_t >= lay_top else 0.0)
             ts_data.append(tuple(row))
 
+        print(f"\nbotm: {botm}\n")
+        print(f"")
+
         # cinlet_raw: shape (_nstp+1, nlay), one row per forcing node.
         cinlet_raw = np.array([row[2:] for row in ts_data])
 
@@ -297,23 +317,52 @@ def build_and_run_henry(
         # ---------------------------------------------------------------
         t_forcing_q = np.linspace(0.0, total_time, _nstp + 1)
         q_mean = inflow / nlay
+        q_min  = 0.01 * q_mean
+        dt_q   = t_forcing_q[1] - t_forcing_q[0]  # time-step size [days]
 
-        # Three superimposed components:
-        #   1. Seasonal: symmetric half-sine ramp (wet→dry→wet), zero net drift.
-        #   2. Episodic events: absolute-sine pulses at weekly recurrence.
-        #   3. Monotone trend: linear drift from 0 to inflow_trend_amp × q_mean.
-        #      Negative value = sustained drying (salt wedge advances long-term).
-        q_seasonal = q_mean * (1.0 + inflow_seasonal_amp * np.sin(np.pi * t_forcing_q / total_time))
-        q_event    = q_mean * inflow_event_amp * np.abs(np.sin(np.pi * t_forcing_q / inflow_event_period))
-        q_drift    = q_mean * inflow_trend_amp * (t_forcing_q / total_time)   # 0 at t=0, full at t=T
-        q_in_series = (
-            q_seasonal
-            + q_event
-            + q_drift
-            + np.random.normal(0.0, 0.005 * q_mean, len(t_forcing_q))
-        )
-        # Enforce a positive minimum inflow so the well never becomes an abstraction.
-        q_in_series = np.clip(q_in_series, 0.01 * q_mean, None)
+        # ---------------------------------------------------------------
+        # Stochastic shot-noise inflow (per layer).
+        #
+        # The total inflow Q_in(t) = Q_base + Σ A_i·exp(-(t-t_i)/k) + ε(t)
+        # is evaluated at every forcing node, where:
+        #   • storm arrivals {t_i} follow a Poisson process
+        #   • peak amplitudes {A_i} are log-normally distributed
+        #   • ε(t) is an AR(1) correlated noise process
+        # A monotone drying/wetting trend is added on top.
+        # ---------------------------------------------------------------
+
+        # — Poisson storm arrivals and log-normal amplitudes —
+        # Expected number of storms; sample actual count from Poisson.
+        n_storms_expected = storm_rate * total_time
+        n_storms = np.random.poisson(n_storms_expected)
+        if n_storms > 0:
+            t_storms = np.sort(np.random.uniform(0.0, total_time, n_storms))
+            # Convert desired (mean, std) of A to the underlying normal parameters,
+            # then sample via np.random.lognormal which does exp(Normal(mu, sigma)).
+            ln_std   = np.sqrt(np.log(1.0 + storm_amp_std**2 / max(storm_amp_mean**2, 1e-12)))
+            ln_mu    = np.log(max(storm_amp_mean, 1e-12)) - 0.5 * ln_std**2
+            A_storms = q_mean * np.random.lognormal(ln_mu, ln_std, n_storms)
+        else:
+            t_storms = np.empty(0)
+            A_storms = np.empty(0)
+
+        # Compute shot-noise contribution at each forcing node.
+        shot_noise = np.zeros(len(t_forcing_q))
+        for t_i, A_i in zip(t_storms, A_storms):
+            mask = t_forcing_q >= t_i
+            shot_noise[mask] += A_i * np.exp(-(t_forcing_q[mask] - t_i) / max(recession_k, 1e-6))
+
+        # — AR(1) correlated background noise —
+        w = np.random.normal(0.0, ar1_sigma * q_mean, len(t_forcing_q))
+        eps = np.zeros(len(t_forcing_q))
+        for j in range(1, len(t_forcing_q)):
+            eps[j] = ar1_phi * eps[j - 1] + w[j]
+
+        # — Monotone drying / wetting trend —
+        q_drift = q_mean * inflow_trend_amp * (t_forcing_q / total_time)
+
+        # — Combine all components and enforce floor —
+        q_in_series = np.maximum(q_min, q_mean + shot_noise + eps + q_drift)
 
         ts_data_q = list(zip(t_forcing_q.tolist(), q_in_series.tolist()))
 

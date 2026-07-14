@@ -229,6 +229,9 @@ def generate_windowed_scenario_dataset(
     dynamic_inflow,
     dynamic_tides,
     add_storage,
+    # Domain dimensions (default = original Henry benchmark)
+    lx=2.0,
+    lz=1.0,
     # Warm-start spin-up parameters
     spinup_time=10.0,
     spinup_nstp=80,
@@ -242,10 +245,13 @@ def generate_windowed_scenario_dataset(
     spring_neap_phase=3.14159,
     tidal_noise_std=0.02,
     slr_rate=0.0,
-    # Freshwater inflow parameters
-    inflow_seasonal_amp=0.5,
-    inflow_event_amp=0.3,
-    inflow_event_period=7.0,
+    # Freshwater inflow parameters (stochastic shot-noise model)
+    storm_rate=1.0,
+    storm_amp_mean=1.0,
+    storm_amp_std=0.5,
+    recession_k=3.0,
+    ar1_phi=0.85,
+    ar1_sigma=0.05,
     inflow_trend_amp=0.0,
     # Optional tidal-phase input channel
     add_tidal_phase=False,
@@ -344,6 +350,8 @@ def generate_windowed_scenario_dataset(
                 common_sim_kwargs = dict(
                     ncol=ncol,
                     nlay=nlay,
+                    Lx=lx,
+                    Lz=lz,
                     cinlet=params["cinlet"],
                     por=params["por"],
                     hk=params["hk"],
@@ -367,9 +375,12 @@ def generate_windowed_scenario_dataset(
                     spring_neap_phase=spring_neap_phase,
                     tidal_noise_std=tidal_noise_std,
                     slr_rate=slr_rate,
-                    inflow_seasonal_amp=inflow_seasonal_amp,
-                    inflow_event_amp=inflow_event_amp,
-                    inflow_event_period=inflow_event_period,
+                    storm_rate=storm_rate,
+                    storm_amp_mean=storm_amp_mean,
+                    storm_amp_std=storm_amp_std,
+                    recession_k=recession_k,
+                    ar1_phi=ar1_phi,
+                    ar1_sigma=ar1_sigma,
                     inflow_trend_amp=inflow_trend_amp,
                 )
 
@@ -436,8 +447,12 @@ def generate_windowed_scenario_dataset(
                     "lag": int(lag),
                     "lag_days": float(lag * dt),
                     "dt": float(dt),
-                    "ncol": ncol,
-                    "nlay": nlay,
+                    "grid": {
+                        "ncol": ncol,
+                        "nlay": nlay,
+                        "lx": lx,
+                        "lz": lz,
+                    },
                     "total_time": total_time,
                     "nstp": nstp,
                     "spinup_time": float(spinup_time),
@@ -543,9 +558,12 @@ def generate_windowed_scenario_dataset(
             "slr_rate": float(slr_rate),
         },
         "inflow_forcing": {
-            "inflow_seasonal_amp": float(inflow_seasonal_amp),
-            "inflow_event_amp": float(inflow_event_amp),
-            "inflow_event_period": float(inflow_event_period),
+            "storm_rate": float(storm_rate),
+            "storm_amp_mean": float(storm_amp_mean),
+            "storm_amp_std": float(storm_amp_std),
+            "recession_k": float(recession_k),
+            "ar1_phi": float(ar1_phi),
+            "ar1_sigma": float(ar1_sigma),
             "inflow_trend_amp": float(inflow_trend_amp),
         },
         "artifacts": {

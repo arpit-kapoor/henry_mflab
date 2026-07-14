@@ -17,6 +17,8 @@ def build_parser():
     ap.add_argument("--outdir", type=str, default="./out")
     ap.add_argument("--ncol", type=int, default=40)
     ap.add_argument("--nlay", type=int, default=20)
+    ap.add_argument("--lx", type=float, default=2.0, help="Domain horizontal extent [m]. Default: 2.0.")
+    ap.add_argument("--lz", type=float, default=1.0, help="Domain vertical extent [m]. Default: 1.0.")
     ap.add_argument("--total-time", type=float, default=30.0)
     ap.add_argument("--nstp", type=int, default=240)
     ap.add_argument("--lag", type=int, default=1)
@@ -139,24 +141,42 @@ def build_parser():
         ),
     )
 
-    # --- Freshwater inflow parameters ---
+    # --- Freshwater inflow parameters (stochastic shot-noise model) ---
     ap.add_argument(
-        "--inflow-seasonal-amp",
+        "--storm-rate",
+        type=float,
+        default=1.0,
+        help="Poisson storm arrival rate [storms/day]. Default: 1.0 (one storm/day on average).",
+    )
+    ap.add_argument(
+        "--storm-amp-mean",
+        type=float,
+        default=1.0,
+        help="Mean storm peak amplitude as fraction of q_mean (log-normal mu). Default: 1.0.",
+    )
+    ap.add_argument(
+        "--storm-amp-std",
         type=float,
         default=0.5,
-        help="Amplitude of the seasonal (half-sine) inflow variation as a fraction of mean inflow. Default: 0.5.",
+        help="Std of storm peak amplitude fraction (log-normal sigma). Default: 0.5.",
     )
     ap.add_argument(
-        "--inflow-event-amp",
+        "--recession-k",
         type=float,
-        default=0.3,
-        help="Amplitude of episodic rainfall events as a fraction of mean inflow. Default: 0.3.",
+        default=3.0,
+        help="Aquifer recession constant [days]. Larger = slower baseflow decay. Default: 3.0.",
     )
     ap.add_argument(
-        "--inflow-event-period",
+        "--ar1-phi",
         type=float,
-        default=7.0,
-        help="Recurrence period of episodic inflow events [days]. Default: 7.0.",
+        default=0.85,
+        help="AR(1) autocorrelation coefficient in (0,1). Default: 0.85.",
+    )
+    ap.add_argument(
+        "--ar1-sigma",
+        type=float,
+        default=0.05,
+        help="AR(1) white-noise std as fraction of q_mean. Default: 0.05.",
     )
     ap.add_argument(
         "--inflow-trend-amp",
@@ -230,6 +250,8 @@ def run(args):
         cinlet=args.cinlet,
         ncol=args.ncol,
         nlay=args.nlay,
+        lx=args.lx,
+        lz=args.lz,
         total_time=args.total_time,
         nstp=args.nstp,
         hk_field=hk_field,
@@ -257,9 +279,12 @@ def run(args):
         spring_neap_phase=args.spring_neap_phase,
         tidal_noise_std=args.tidal_noise_std,
         slr_rate=args.slr_rate,
-        inflow_seasonal_amp=args.inflow_seasonal_amp,
-        inflow_event_amp=args.inflow_event_amp,
-        inflow_event_period=args.inflow_event_period,
+        storm_rate=args.storm_rate,
+        storm_amp_mean=args.storm_amp_mean,
+        storm_amp_std=args.storm_amp_std,
+        recession_k=args.recession_k,
+        ar1_phi=args.ar1_phi,
+        ar1_sigma=args.ar1_sigma,
         inflow_trend_amp=args.inflow_trend_amp,
         add_tidal_phase=args.add_tidal_phase,
     )

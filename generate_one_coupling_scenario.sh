@@ -32,8 +32,10 @@ DIFFC="${3:-0.57024}"
 # Classic Example values (single value per parameter)
 HK_VALUES="${HK_VALUES:-864.0}"
 POR_VALUES="${POR_VALUES:-0.35}"
-INFLOW_VALUES="${INFLOW_VALUES:-5.7024,2.851}"
-GHB_HEAD_VALUES="${GHB_HEAD_VALUES:-0.4}"
+# inflow scaled 10× for the 10× taller domain to preserve Q/(K·Lz) ratio:
+INFLOW_VALUES="${INFLOW_VALUES:-14.261}"
+# ghb_head = 40% of domain height (0.4×Lz = 0.4×10 = 4.0 m):
+GHB_HEAD_VALUES="${GHB_HEAD_VALUES:-3.0}"
 AL_VALUES="${AL_VALUES:-0.0}"
 AT_VALUES="${AT_VALUES:-0.0}"
 CINLET="${CINLET:-35.0}"
@@ -43,30 +45,44 @@ CINLET="${CINLET:-35.0}"
 # Grid/time controls
 NCOL="${NCOL:-40}"
 NLAY="${NLAY:-20}"
-TOTAL_TIME="${TOTAL_TIME:-30}"
-NSTP="${NSTP:-240}"
+# Physical domain dimensions (10× the original 2×1 m benchmark domain)
+LX="${LX:-8.0}"  # horizontal extent [m]
+LZ="${LZ:-4.0}"  # vertical extent [m]
+TOTAL_TIME="${TOTAL_TIME:-90}"
+NSTP="${NSTP:-720}"
 
 # Spin-up controls (warm-start pre-run before the main simulation)
-SPINUP_TIME="${SPINUP_TIME:-10}"
-SPINUP_NSTP="${SPINUP_NSTP:-80}"
+SPINUP_TIME="${SPINUP_TIME:-0.5}"
+SPINUP_NSTP="${SPINUP_NSTP:-4}"
 
 # Tidal forcing parameters
 # Reduced from 0.5/0.3 to match real island data: neap ±0.05m, spring ±0.25m around MSL.
-TIDAL_AMPLITUDE="${TIDAL_AMPLITUDE:-0.15}"
-SPRING_NEAP_AMP="${SPRING_NEAP_AMP:-0.10}"
+TIDAL_AMPLITUDE="${TIDAL_AMPLITUDE:-0.50}"
+SPRING_NEAP_AMP="${SPRING_NEAP_AMP:-0.20}"
 # Phase offset in radians: pi (3.14159) = start at neap so amplitude grows to spring around day 7.
 # Use 0 to start at spring (old behaviour). Neap-start matches real coastal tidal records better.
 SPRING_NEAP_PHASE="${SPRING_NEAP_PHASE:-3.14159}"
 # Sea-level rise [m/day]: 0.003 gives +0.09 m over 30 days (exaggerated but detectable)
 SLR_RATE="${SLR_RATE:-0.003}"
 
-# Freshwater inflow trend: -0.4 cuts inflow by 40% of mean by end of run (sustained drying)
-INFLOW_TREND_AMP="${INFLOW_TREND_AMP:--0.4}"
-
 # Prediction lag (in wall-clock days; overrides --lag when set)
 LAG_DAYS="${LAG_DAYS:-1}"
 
 # Dataset split controls
+# Freshwater inflow — stochastic shot-noise model parameters
+# storm_rate: average Poisson storm arrivals per day (1.0 = one storm/day)
+STORM_RATE="${STORM_RATE:-0.2}"
+# storm_amp_mean/std: log-normal distribution parameters for storm peak (fraction of q_mean)
+STORM_AMP_MEAN="${STORM_AMP_MEAN:-1.0}"
+STORM_AMP_STD="${STORM_AMP_STD:-0.25}"
+# recession_k: aquifer baseflow recession constant [days]; larger = slower decay
+RECESSION_K="${RECESSION_K:-1.0}"
+# AR(1) noise: phi=autocorrelation, sigma=noise std as fraction of q_mean
+AR1_PHI="${AR1_PHI:-0.85}"
+AR1_SIGMA="${AR1_SIGMA:-0.05}"
+# Monotone drying/wetting trend: negative = drying (salt wedge advances)
+INFLOW_TREND_AMP="${INFLOW_TREND_AMP:--0.4}"
+
 SEED="${SEED:-42}"
 TRAIN_FRAC="${TRAIN_FRAC:-0.7}"
 VAL_FRAC="${VAL_FRAC:-0.15}"
@@ -94,6 +110,8 @@ CMD=(
   --outdir "$OUTDIR"
   --ncol "$NCOL"
   --nlay "$NLAY"
+  --lx "$LX"
+  --lz "$LZ"
   --total-time "$TOTAL_TIME"
   --nstp "$NSTP"
   --mf6-exe "$MF6_EXE"
@@ -116,6 +134,12 @@ CMD=(
   --spring-neap-amp "$SPRING_NEAP_AMP"
   --spring-neap-phase "$SPRING_NEAP_PHASE"
   --slr-rate "$SLR_RATE"
+  --storm-rate "$STORM_RATE"
+  --storm-amp-mean "$STORM_AMP_MEAN"
+  --storm-amp-std "$STORM_AMP_STD"
+  --recession-k "$RECESSION_K"
+  --ar1-phi "$AR1_PHI"
+  --ar1-sigma "$AR1_SIGMA"
   --inflow-trend-amp "$INFLOW_TREND_AMP"
 )
 
