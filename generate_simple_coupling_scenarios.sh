@@ -1,37 +1,44 @@
 #!/usr/bin/env bash
 # =============================================================================
-# generate_simple_henry.sh
+# generate_simple_coupling_scenarios.sh
 #
-# Dataset generator for the SIMPLIFIED Henry problem:
+# Structured dataset generator for the SIMPLIFIED Henry problem:
+#   - Full Cartesian grid of beta_c x diffc scenarios
 #   - Zero specific storage (Ss = 0) — elliptic groundwater flow equation
 #   - Zero influx — no freshwater inflow (WEL) or tidal forcing (GHB)
 #   - Homogeneous Dirichlet BCs: p = 0 and C = 0 on all four sides
 #   - Buoyancy-driven flow only via ρ(C) = ρ₀(1 + β_C C)
+#   - Reorganizes outputs into clean numeric scenario and run directories:
+#       <OUTDIR>/
+#       ├── scenarios_manifest.json
+#       └── scenarios/
+#           ├── scenario_01/
+#           │   ├── scenario_config.json
+#           │   ├── runs_config.json
+#           │   └── run_000001/
+#           │       └── windows.npz
 #
 # Usage:
-#   ./generate_simple_henry.sh [OUTDIR]
+#   ./generate_simple_coupling_scenarios.sh [OUTDIR] [LAG]
 #
 # Example:
-#   ./generate_simple_henry.sh ./simple_henry_data
-#   BETA_C_VALUES="0.5,0.7,1.0" DIFFC_VALUES="0.28512,0.57024" \
-#     ./generate_simple_henry.sh ./simple_henry_sweep
+#   ./generate_simple_coupling_scenarios.sh
+#   ./generate_simple_coupling_scenarios.sh ./simple_scenarios_out 2
 #
 # All parameters can be overridden via environment variables.
 # =============================================================================
 set -euo pipefail
 
-# ---------------------------------------------------------------------------
-# Output directory
-# ---------------------------------------------------------------------------
-OUTDIR="${1:-/Users/$USER/Projects/groundwater/data/simple_henry_data}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # ---------------------------------------------------------------------------
-# Physical parameters
-# Classic Henry benchmark values:
-#   β_C    = 0.7   [m³/kg]
-#   diffc  = 0.57024 [m²/d]
-#   hk     = 864.0 [m/d]
-#   por    = 0.35
+# Output directory and prediction lag
+# ---------------------------------------------------------------------------
+OUTDIR="${1:-${OUTDIR:-/Users/$USER/Projects/groundwater/data/simple_henry_data/grid_scenarios_20x40}}"
+LAG="${2:-${LAG:-1}}"
+
+# ---------------------------------------------------------------------------
+# Physical parameters (finalized simple Henry values)
 # ---------------------------------------------------------------------------
 BETA_C_VALUES="${BETA_C_VALUES:-"0.01, 0.05, 0.1, 0.2"}"
 # diffc: effective diffusion coefficient [m²/d].
@@ -59,7 +66,7 @@ C_TRANS_WIDTH_VALUES="${C_TRANS_WIDTH_VALUES:-"0.01"}"
 
 # ---------------------------------------------------------------------------
 # Grid / time controls
-# Default: 40×20 grid, 2 m × 1 m domain, 1-day run, 100 steps (Δt = 0.01 d)
+# 40×20 grid, 2 m × 1 m domain, total time = 2.0 days, 50 steps (dt = 0.04 d)
 # ---------------------------------------------------------------------------
 NCOL="${NCOL:-40}"
 NLAY="${NLAY:-20}"
@@ -67,11 +74,6 @@ LX="${LX:-2.0}"
 LZ="${LZ:-1.0}"
 TOTAL_TIME="${TOTAL_TIME:-2.0}"
 NSTP="${NSTP:-50}"
-
-# ---------------------------------------------------------------------------
-# Prediction lag (steps)
-# ---------------------------------------------------------------------------
-LAG="${LAG:-1}"
 
 # ---------------------------------------------------------------------------
 # Dataset / split controls
@@ -84,26 +86,37 @@ MAX_RUNS_PER_SCENARIO="${MAX_RUNS_PER_SCENARIO:-}"
 # ---------------------------------------------------------------------------
 # Runtime controls
 # ---------------------------------------------------------------------------
-MF6_EXE="${MF6_EXE:-./.venv/bin/mf6}"
+MF6_EXE="${MF6_EXE:-$SCRIPT_DIR/.venv/bin/mf6}"
 SAVE_TIMESERIES="${SAVE_TIMESERIES:-0}"
 SAVE_MODFLOW_FILES="${SAVE_MODFLOW_FILES:-1}"
-OVERWRITE="${OVERWRITE:-0}"
+OVERWRITE="${OVERWRITE:-1}"
+KEEP_RAW="${KEEP_RAW:-0}"
 KAPPA_FILE="${KAPPA_FILE:-}"
 
 # ---------------------------------------------------------------------------
-# Animation controls (post-generation)
+# Resolve scenario grid counts
 # ---------------------------------------------------------------------------
-GENERATE_ANIMATION="${GENERATE_ANIMATION:-1}"
-ANIMATE_FPS="${ANIMATE_FPS:-20}"
-ANIMATE_DPI="${ANIMATE_DPI:-150}"
-ANIMATE_SKIP="${ANIMATE_SKIP:-1}"
+if [[ -z "${BETA_COUNT:-}" ]]; then
+  BETA_COUNT=$(uv run python -c "print(len([x for x in '''$BETA_C_VALUES'''.split(',') if x.strip()]))")
+fi
+if [[ -z "${DIFFC_COUNT:-}" ]]; then
+  DIFFC_COUNT=$(uv run python -c "print(len([x for x in '''$DIFFC_VALUES'''.split(',') if x.strip()]))")
+fi
+
+RAW_OUTDIR="$OUTDIR/_raw_generation"
+
+if [[ "$MF6_EXE" == */* && ! -x "$MF6_EXE" ]]; then
+  echo "ERROR: mf6 executable not found or not executable: $MF6_EXE" >&2
+  echo "Hint: set MF6_EXE to an absolute executable path, or install mf6 in PATH and set MF6_EXE=mf6." >&2
+  exit 1
+fi
 
 # ---------------------------------------------------------------------------
-# Build command
+# Build generation command
 # ---------------------------------------------------------------------------
 CMD=(
   uv run python run_simple_henry.py
-  --outdir        "$OUTDIR"
+  --outdir        "$RAW_OUTDIR"
   --ncol          "$NCOL"
   --nlay          "$NLAY"
   --lx            "$LX"
@@ -151,18 +164,20 @@ fi
 # Print configuration and run
 # ---------------------------------------------------------------------------
 echo "============================================================"
-echo "  Simplified Henry dataset generator"
-echo "  PDE:      elliptic flow + parabolic transport"
-echo "  Storage:  Ss = 0  (no STO package)"
-echo "  Influx:   zero    (no WEL / GHB)"
-echo "  BCs:      homogeneous Dirichlet p=0, C=0 on all sides"
+echo "  Simplified Henry coupling/diffusion scenario generator"
+echo "  PDE:        elliptic flow + parabolic transport"
+echo "  Storage:    Ss = 0  (no STO package)"
+echo "  Influx:     zero    (no WEL / GHB)"
+echo "  BCs:        homogeneous Dirichlet p=0, C=0 on all sides"
 echo "============================================================"
 echo "  outdir:         $OUTDIR"
+echo "  raw outdir:     $RAW_OUTDIR"
 echo "  grid:           nlay=$NLAY  ncol=$NCOL  Lx=$LX  Lz=$LZ"
-echo "  time:           total=$TOTAL_TIME d  nstp=$NSTP  dt=$(echo "scale=4; $TOTAL_TIME/$NSTP" | bc) d"
+echo "  time:           total=$TOTAL_TIME d  nstp=$NSTP  dt=$(uv run python -c "print($TOTAL_TIME/$NSTP)") d"
 echo "  initial C:      x_toe=$C_X_TOE_VALUES  x_top=$C_X_TOP_VALUES  trans_width=$C_TRANS_WIDTH_VALUES"
-echo "  beta_c values:  $BETA_C_VALUES"
-echo "  diffc values:   $DIFFC_VALUES"
+echo "  beta_c values:  $BETA_C_VALUES (count=$BETA_COUNT)"
+echo "  diffc values:   $DIFFC_VALUES (count=$DIFFC_COUNT)"
+echo "  scenarios:      $((BETA_COUNT * DIFFC_COUNT))"
 echo "  hk values:      $HK_VALUES"
 echo "  por values:     $POR_VALUES"
 echo "  al / at:        $AL / $AT"
@@ -171,63 +186,39 @@ echo "  lag:            $LAG step(s)"
 echo "  split seed:     $SEED  train=$TRAIN_FRAC  val=$VAL_FRAC"
 echo "  save mf6 files: $SAVE_MODFLOW_FILES"
 echo "  mf6 exe:        $MF6_EXE"
-echo "  animate:        $GENERATE_ANIMATION  (fps=$ANIMATE_FPS  dpi=$ANIMATE_DPI  skip=$ANIMATE_SKIP)"
 echo "  command:        ${CMD[*]}"
 echo "============================================================"
 
 "${CMD[@]}"
 
-if [[ "$GENERATE_ANIMATION" == "1" && "$SAVE_MODFLOW_FILES" != "1" ]]; then
-  echo
-  echo "Skipping animation because SAVE_MODFLOW_FILES=0 removed gwf.hds/gwt.ucn."
-  echo "Set SAVE_MODFLOW_FILES=1 to enable animation output."
-fi
+# ---------------------------------------------------------------------------
+# Reorganize into clean numeric scenario and run layout
+# ---------------------------------------------------------------------------
+REORG_CMD=(
+  uv run python -m henry_data.reorganize
+  --raw-outdir "$RAW_OUTDIR"
+  --outdir "$OUTDIR"
+  --beta-count "$BETA_COUNT"
+  --diffc-count "$DIFFC_COUNT"
+  --lag "$LAG"
+)
 
-if [[ "$GENERATE_ANIMATION" == "1" && "$SAVE_MODFLOW_FILES" == "1" ]]; then
-  # Resolve the run workspace from manifest.json (last successful run).
-  RUN_WORKSPACE="$(uv run python - "$OUTDIR" <<'PY'
-import json
-import pathlib as pl
-import sys
-
-outdir = pl.Path(sys.argv[1])
-manifest_path = outdir / "manifest.json"
-
-if not manifest_path.exists():
-    raise SystemExit(f"manifest not found: {manifest_path}")
-
-with manifest_path.open("r", encoding="utf-8") as fp:
-    manifest = json.load(fp)
-
-candidates = [
-    r for r in manifest.get("runs", [])
-    if r.get("status") in {"ok", "skipped"}
-]
-
-if not candidates:
-    raise SystemExit(
-        f"No successful run workspace found in {manifest_path}"
-    )
-
-print(candidates[-1]["workspace"])
-PY
-)"
-
-  ANIMATE_CMD=(
-    uv run python animate_simple_henry.py
-    --dataset-path "$OUTDIR"
-    --run-path     "$RUN_WORKSPACE"
-    --fps          "$ANIMATE_FPS"
-    --dpi          "$ANIMATE_DPI"
-    --skip         "$ANIMATE_SKIP"
-  )
-
-  echo
-  echo "Generating animation from saved outputs"
-  echo "  run path:  $RUN_WORKSPACE"
-  echo "  command:   ${ANIMATE_CMD[*]}"
-  "${ANIMATE_CMD[@]}"
+if [[ "$OVERWRITE" == "1" ]]; then
+  REORG_CMD+=(--overwrite)
 fi
 
 echo
-echo "Done. See manifest: $OUTDIR/manifest.json"
+echo "Reorganizing raw outputs into clean scenario layout"
+echo "  command:     ${REORG_CMD[*]}"
+"${REORG_CMD[@]}"
+
+# ---------------------------------------------------------------------------
+# Clean up raw outputs if KEEP_RAW=0
+# ---------------------------------------------------------------------------
+if [[ "$KEEP_RAW" == "0" ]]; then
+  rm -rf "$RAW_OUTDIR"
+fi
+
+echo
+echo "Done. See: $OUTDIR/scenarios_manifest.json"
+

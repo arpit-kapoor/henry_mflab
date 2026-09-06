@@ -40,12 +40,18 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Number of uniform time steps. Default: 240.")
 
     # Initial concentration
-    ap.add_argument("--c0", type=float, default=35.0,
-                    help=(
-                        "Uniform initial concentration C₀ [kg/m³]. "
-                        "Broadcast to a spatially constant field over the whole domain. "
-                        "Default: 35.0 (salt-saturated)."
-                    ))
+    # ap.add_argument("--c0", type=float, default=35.0,
+    #                 help=(
+    #                     "Uniform initial concentration C₀ [kg/m³]. "
+    #                     "Broadcast to a spatially constant field over the whole domain. "
+    #                     "Default: 35.0 (salt-saturated)."
+    #                 ))
+    ap.add_argument("--c0-x-toe-values", type=str, default="0.5, 0.0, 0.5",
+                    help="Comma-separated initial concentration values at the toe. Default: 0.5, 0.0, 0.5.")
+    ap.add_argument("--c0-x-top-values", type=str, default="0.5, 1.0, 1.5",
+                    help="Comma-separated initial concentration values at the top. Default: 0.5, 1.0, 1.5.")
+    ap.add_argument("--c0-trans-width-values", type=str, default="0.001, 0.01, 0.1",
+                    help="Comma-separated transition width values for the initial concentration profile. Default: 0.001, 0.01, 0.1.")
 
     # Parameter sweep
     ap.add_argument("--beta-c-values", type=str, default="0.7",
@@ -117,7 +123,9 @@ def run(args: argparse.Namespace):
         diffc_values=_parse_float_csv(args.diffc_values),
         hk_values=_parse_float_csv(args.hk_values),
         por_values=_parse_float_csv(args.por_values),
-        C0=args.c0,
+        c0_x_toe_values=_parse_float_csv(args.c0_x_toe_values),
+        c0_x_top_values=_parse_float_csv(args.c0_x_top_values),
+        c0_trans_width_values=_parse_float_csv(args.c0_trans_width_values),
         ncol=args.ncol,
         nlay=args.nlay,
         lx=args.lx,

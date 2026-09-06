@@ -37,8 +37,8 @@ REQUIRED_RUN_FILES = {"windows.npz"}
 
 # Default initial head for all runs (consistent with Dirichlet p|∂Ω = 0)
 STANDARD_INIT_HEAD = 0.0
-# Default initial concentration — uniform, salt-saturated [kg/m³]
-STANDARD_INIT_CONCENTRATION = 35.0
+# # Default initial concentration — uniform, salt-saturated [kg/m³]
+# STANDARD_INIT_CONCENTRATION = 35.0
 
 
 # ---------------------------------------------------------------------------
@@ -89,12 +89,8 @@ def _scenario_tag(beta_c: float, diffc: float) -> str:
     return f"scenario_beta{beta_c:.3f}_diffc{diffc:.5f}"
 
 
-def _run_tag(run_index: int, params: dict) -> str:
-    return (
-        f"run_{run_index:06d}_"
-        f"hk{params['hk']:.2f}_"
-        f"por{params['por']:.3f}"
-    )
+def _run_tag(run_index: int) -> str:
+    return (f"run_{run_index:03d}")
 
 
 # ---------------------------------------------------------------------------
@@ -171,8 +167,10 @@ def generate_simple_henry_dataset(
     diffc_values,
     hk_values,
     por_values,
-    # Initial concentration — scalar or (nlay, ncol) array
-    C0=STANDARD_INIT_CONCENTRATION,
+    # Initial concentration profile parameters
+    c0_x_toe_values,
+    c0_x_top_values,
+    c0_trans_width_values,
     # Grid / time
     ncol: int = 80,
     nlay: int = 40,
@@ -213,8 +211,8 @@ def generate_simple_henry_dataset(
     beta_c_values, diffc_values, hk_values, por_values : list of float
         Parameter values to sweep.  All four lists are combined as a full
         Cartesian product.  Pass singleton lists to fix a parameter.
-    C0 : float or array_like of shape (nlay, ncol)
-        Initial concentration field.  A scalar is broadcast uniformly.
+    c0_x_toe_values, c0_x_top_values, c0_trans_width_values : list of float
+        Parameters for the initial concentration profile.
     lag : int
         Prediction lag in time steps.
     overwrite : bool
@@ -255,7 +253,9 @@ def generate_simple_henry_dataset(
         scenario_dir = outdir / scenario_tag
         scenario_dir.mkdir(parents=True, exist_ok=True)
 
-        run_combinations = list(itertools.product(hk_values, por_values))
+        run_combinations = list(itertools.product(hk_values, por_values,
+                                                  c0_x_toe_values, c0_x_top_values, 
+                                                  c0_trans_width_values))
         if max_runs_per_scenario is not None:
             run_combinations = run_combinations[:max_runs_per_scenario]
 
@@ -267,7 +267,7 @@ def generate_simple_henry_dataset(
         scenario_runs:     list[dict] = []
         scenario_failures: list[dict] = []
 
-        for run_index, (hk, por) in enumerate(run_combinations, start=1):
+        for run_index, (hk, por, c0_x_toe, c0_x_top, c0_trans_width) in enumerate(run_combinations, start=1):
             params = {
                 "beta_c":  float(beta_c),
                 "diffc":   float(diffc),
@@ -276,10 +276,12 @@ def generate_simple_henry_dataset(
                 "al":      float(al),
                 "at":      float(at),
                 "rho0":    float(rho0),
-                "C0_scalar": float(C0) if np.ndim(C0) == 0 else None,
+                "c0_x_toe": float(c0_x_toe),
+                "c0_x_top": float(c0_x_top),
+                "c0_trans_width": float(c0_trans_width),
             }
 
-            run_tag = _run_tag(run_index, params)
+            run_tag = _run_tag(run_index)
             run_dir = scenario_dir / run_tag
             run_dir.mkdir(parents=True, exist_ok=True)
             sample_file = run_dir / "windows.npz"
@@ -309,7 +311,9 @@ def generate_simple_henry_dataset(
                     Lz=lz,
                     total_time=total_time,
                     nstp=nstp,
-                    C0=C0,
+                    c0_x_toe=c0_x_toe,
+                    c0_x_top=c0_x_top,
+                    c0_trans_width=c0_trans_width,
                     por=por,
                     hk=hk,
                     vk=hk,   # isotropic by default; vk_field override available

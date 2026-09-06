@@ -8,7 +8,7 @@ Implements the coupled elliptic-parabolic system:
 with:
     - Zero specific storage (Ss = 0) — flow equation is quasi-static/elliptic
     - No boundary influx (no WEL, no GHB)
-    - Homogeneous Dirichlet BCs: p = 0 and C = 0 on all of ∂Ω
+    - Dirichlet BCs: p = 0 on all of ∂Ω; C = 0 on top/left (groundwater) and C = 35 kg/m³ on right/bottom (seawater)
     - Linear equation of state: ρ(C) = ρ₀(1 + β_C · C)
     - Initial condition: C(x, 0) = C₀(x)  (spatially varying matrix)
 
@@ -31,6 +31,90 @@ def _to_layer_col_field(value, nlay, ncol, name):
     return arr
 
 
+def create_s_shaped_wedge(
+    nlay: int = 40,
+    ncol: int = 80,
+    Lx: float = 2.0,
+    Lz: float = 1.0,
+    c_fresh: float = 0.0,
+    c_sea: float = 35.0,
+    x_toe: float | None = None,
+    x_top: float | None = None,
+    trans_width: float | None = None,
+) -> np.ndarray:
+    """Create an S-shaped saltwater wedge initial concentration field.
+
+    Simulates the intrusion of seawater (high concentration) from the right
+    boundary (x = Lx) into freshwater (low concentration) on the left (x = 0),
+    forming a wedge that penetrates inland along the aquifer base (z = 0) and
+    recedes toward the coast near the aquifer surface (z = Lz).
+
+    The interface position x_int(z) follows a smooth S-curve (cubic smoothstep)
+    from x_toe at the bottom (z = 0) to x_top at the top (z = Lz).
+    The concentration across the interface transitions smoothly between
+    c_fresh and c_sea using a sigmoidal profile (logistic S-curve) with
+    characteristic transition width `trans_width`.
+
+    Parameters
+    ----------
+    nlay : int, default=40
+        Number of layers (vertical discretization).
+    ncol : int, default=80
+        Number of columns (horizontal discretization).
+    Lx : float, default=2.0
+        Horizontal domain length [m].
+    Lz : float, default=1.0
+        Vertical domain length [m].
+    c_fresh : float, default=0.0
+        Freshwater solute concentration [kg/m³].
+    c_sea : float, default=35.0
+        Seawater solute concentration [kg/m³].
+    x_toe : float or None, default=None
+        Horizontal position of the wedge toe at the base (z = 0) [m].
+        Defaults to 0.4 * Lx.
+    x_top : float or None, default=None
+        Horizontal position of the wedge interface at the top (z = Lz) [m].
+        Defaults to 0.8 * Lx.
+    trans_width : float or None, default=None
+        Characteristic transition width (mixing zone thickness) [m].
+        Defaults to 0.05 * Lx.
+
+    Returns
+    -------
+    conc : np.ndarray of shape (nlay, ncol)
+        2-D concentration field [kg/m³], where layer 0 corresponds to the top
+        (z ≈ Lz) and layer nlay-1 corresponds to the bottom (z ≈ 0).
+    """
+    if x_toe is None:
+        x_toe = 0.4 * Lx
+    if x_top is None:
+        x_top = 1.0 * Lx
+    if trans_width is None:
+        trans_width = 0.05 * Lx
+
+    dx = Lx / ncol
+    dz = Lz / nlay
+    # Cell center coordinates
+    x = (np.arange(ncol, dtype=float) + 0.5) * dx
+    # Layer 0 is top (z ≈ Lz), layer nlay-1 is bottom (z ≈ 0)
+    z = Lz - (np.arange(nlay, dtype=float) + 0.5) * dz
+
+    # Normalized vertical coordinate: 0 at base, 1 at surface
+    z_norm = np.clip(z / Lz, 0.0, 1.0)
+
+    # Smooth S-curve (smoothstep) for interface position as a function of depth
+    s_z = 3.0 * z_norm**2 - 2.0 * z_norm**3
+    x_int = x_toe + (x_top - x_toe) * s_z
+
+    # Sigmoidal S-shaped transition across the interface in the horizontal direction
+    # Freshwater (c_fresh) on left (x << x_int), seawater (c_sea) on right (x >> x_int)
+    diff = (x[None, :] - x_int[:, None]) / trans_width
+    diff = np.clip(diff, -50.0, 50.0)
+    sigmoid = 1.0 / (1.0 + np.exp(-diff))
+
+    return c_fresh + (c_sea - c_fresh) * sigmoid
+
+
 def build_and_run_simple_henry(
     workspace,
     # Grid parameters
@@ -41,8 +125,10 @@ def build_and_run_simple_henry(
     # Time discretisation
     total_time: float = 30.0,
     nstp: int = 240,
-    # Initial condition — scalar or (nlay, ncol) array; uniform 35 kg/m³ by default
-    C0=35.0,
+    # Initial concentration profile
+    c0_x_toe: float = None,
+    c0_x_top: float = None,
+    c0_trans_width: float = None,
     # Hydraulic parameters
     por: float = 0.35,
     hk: float = 864.0,   # horizontal hydraulic conductivity [m/d]  (= κ/μ proxy)
@@ -64,9 +150,11 @@ def build_and_run_simple_henry(
     """Build and run the simplified Henry density-driven convection problem.
 
     The domain Ω = [0, Lx] × [0, Lz] is discretised on an nlay × ncol
-    structured grid (1 row, so effectively 2-D).  All four boundaries carry
-    constant-head (CHD) cells with head = 0 and auxiliary concentration = 0,
-    encoding the homogeneous Dirichlet conditions p|∂Ω = 0, C|∂Ω = 0.
+    structured grid (1 row, so effectively 2-D). All four boundaries carry
+    constant-head (CHD) cells with head = 0 (encoding p|∂Ω = 0).
+    The transport model imposes Dirichlet boundary conditions via CNC cells:
+    C = 0 kg/m³ on the top and left boundaries (freshwater/groundwater), and
+    C = 35 kg/m³ on the right and bottom boundaries (seawater interface).
     There is no storage package (Ss = 0), no well inflow, and no GHB tidal
     forcing — motion arises purely from the buoyancy term in the BUY package.
 
@@ -82,10 +170,11 @@ def build_and_run_simple_henry(
         Simulation duration [days].
     nstp : int
         Number of uniform time steps.
-    C0 : float or array_like of shape (nlay, ncol)
-        Initial solute concentration field [kg/m³].  A scalar value is
-        broadcast to fill the whole domain; pass a 2-D array for spatially
-        varying initial conditions.
+    c0_x_toe, c0_x_top, c0_trans_width : float
+        Parameters controlling the initial concentration profile C₀(x, z):
+        - c0_x_toe : horizontal position of the wedge toe at the base (z = 0) [m]
+        - c0_x_top : horizontal position of the wedge interface at the top (z = Lz) [m]
+        - c0_trans_width : characteristic transition width (mixing zone thickness) [m]
     por : float
         Porosity η ∈ (0, 1).
     hk, vk : float
@@ -148,7 +237,9 @@ def build_and_run_simple_henry(
     # -----------------------------------------------------------------------
     # Validate / broadcast spatially varying fields
     # -----------------------------------------------------------------------
-    conc0_arr = _to_layer_col_field(C0, nlay, ncol, "C0")
+    conc0_arr = create_s_shaped_wedge(nlay=nlay, ncol=ncol, Lx=Lx, Lz=Lz,
+                                      x_toe=c0_x_toe, x_top=c0_x_top,
+                                      trans_width=c0_trans_width)
     hk_arr    = _to_layer_col_field(hk if hk_field is None else hk_field, nlay, ncol, "hk_field")
     vk_arr    = _to_layer_col_field(vk if vk_field is None else vk_field, nlay, ncol, "vk_field")
 
@@ -317,15 +408,32 @@ def build_and_run_simple_henry(
     flopy.mf6.ModflowGwtssm(gwt, sources=None)
 
     # -------------------------------------------------------------------
-    # Constant-Concentration (CNC) package — encodes C = 0 on all of ∂Ω.
+    # Constant-Concentration (CNC) package:
+    #   - Left (j = 0) and top (k = 0) boundaries: C = 0 kg/m³ (fresh groundwater)
+    #   - Right (j = ncol - 1) and bottom (k = nlay - 1) boundaries: C = 35 kg/m³ (seawater interface)
     #
-    # This is the GWT analogue of CHD for head.  Unlike SSM (which only
+    # This is the GWT analogue of CHD for head. Unlike SSM (which only
     # activates when there is inflow at a stress boundary), CNC directly
     # fixes the concentration at the specified cells at every time step,
-    # correctly imposing the homogeneous Dirichlet condition C|∂Ω = 0
-    # regardless of the local Darcy velocity.
+    # correctly imposing the Dirichlet boundary conditions.
     # -------------------------------------------------------------------
-    cnc_spd = [(*cell, 0.0) for cell in sorted(chd_cells)]
+    c_sea_bc = float(np.max(conc0_arr)) if conc0_arr is not None else 35.0
+    c_fresh_bc = 0.0
+
+    cnc_dict = {}
+    # Top and left boundaries: freshwater / inland (C = 0)
+    for j in range(ncol):
+        cnc_dict[(0, 0, j)] = c_fresh_bc
+    for k in range(nlay):
+        cnc_dict[(k, 0, 0)] = c_fresh_bc
+
+    # Right-hand and bottom boundaries: seawater interface (C = 35 kg/m³)
+    for k in range(nlay):
+        cnc_dict[(k, 0, ncol - 1)] = c_sea_bc
+    for j in range(ncol):
+        cnc_dict[(nlay - 1, 0, j)] = c_sea_bc
+
+    cnc_spd = [(*cell, conc) for cell, conc in sorted(cnc_dict.items())]
     flopy.mf6.ModflowGwtcnc(gwt, stress_period_data=cnc_spd, pname="CNC-1")
 
     # Mobile storage term for concentration (uses porosity η).

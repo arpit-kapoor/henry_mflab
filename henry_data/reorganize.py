@@ -50,27 +50,40 @@ def _write_json(path: Path, payload: dict) -> None:
 def reorganize_coupling_diffusion_outputs(
     raw_outdir: Path,
     outdir: Path,
-    beta_count: int,
-    diffc_count: int,
-    lag: int,
-    overwrite: bool,
+    beta_count: int | None = None,
+    diffc_count: int | None = None,
+    lag: int = 1,
+    overwrite: bool = False,
 ) -> dict:
     scenarios_root = outdir / "scenarios"
     scenarios_root.mkdir(parents=True, exist_ok=True)
 
+    raw_manifest = _load_json(raw_outdir / "manifest.json")
+    scenario_entries = raw_manifest.get("scenarios", [])
+
+    if beta_count is not None and diffc_count is not None and beta_count > 0 and diffc_count > 0:
+        expected = int(beta_count) * int(diffc_count)
+        if len(scenario_entries) != expected:
+            raise ValueError(
+                f"Expected {expected} scenarios in raw manifest ({beta_count}x{diffc_count}), "
+                f"found {len(scenario_entries)}"
+            )
+    else:
+        unique_betas = {float(s["beta_c"]) for s in scenario_entries if "beta_c" in s}
+        unique_diffcs = {float(s["diffc"]) for s in scenario_entries if "diffc" in s}
+        beta_count = len(unique_betas)
+        diffc_count = len(unique_diffcs)
+
     scenarios_manifest = {
         "layout": "coupling_diffusion_grid",
         "lag": int(lag),
+        "beta_count": int(beta_count),
+        "diffc_count": int(diffc_count),
+        "grid": raw_manifest.get("grid"),
+        "time": raw_manifest.get("time"),
+        "pde": raw_manifest.get("pde"),
         "scenarios": [],
     }
-
-    raw_manifest = _load_json(raw_outdir / "manifest.json")
-    scenario_entries = raw_manifest.get("scenarios", [])
-    expected = int(beta_count) * int(diffc_count)
-    if len(scenario_entries) != expected:
-        raise ValueError(
-            f"Expected {expected} scenarios in raw manifest, found {len(scenario_entries)}"
-        )
 
     for idx, scen_summary in enumerate(scenario_entries, start=1):
         raw_name = scen_summary["scenario"]
@@ -88,12 +101,15 @@ def reorganize_coupling_diffusion_outputs(
 
         scenario_config = {
             "scenario_index": idx,
+            "scenario": scen.get("scenario", raw_name),
             "beta_c": float(scen["beta_c"]),
             "diffc": float(scen["diffc"]),
             "lag": int(lag),
+            "lag_days": scen.get("lag_days"),
+            "dt": scen.get("dt"),
             "n_total_runs": scen.get("n_total_runs", len(runs_cfg)),
-            "n_ok_runs": scen.get("n_ok_runs", 0),
-            "n_skipped_runs": scen.get("n_skipped_runs", 0),
+            "n_ok_runs": scen.get("n_ok_runs", sum(r.get("status") == "ok" for r in runs_cfg)),
+            "n_skipped_runs": scen.get("n_skipped_runs", sum(r.get("status") == "skipped" for r in runs_cfg)),
             "n_failed_runs": scen.get("n_failed_runs", 0),
         }
 
@@ -120,8 +136,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ap.add_argument("--raw-outdir", type=str, required=True)
     ap.add_argument("--outdir", type=str, required=True)
-    ap.add_argument("--beta-count", type=int, required=True)
-    ap.add_argument("--diffc-count", type=int, required=True)
+    ap.add_argument("--beta-count", type=int, default=None,
+                    help="Expected number of beta_c grid points (optional validation).")
+    ap.add_argument("--diffc-count", type=int, default=None,
+                    help="Expected number of diffc grid points (optional validation).")
     ap.add_argument("--lag", type=int, required=True)
     ap.add_argument("--overwrite", action="store_true")
     return ap
