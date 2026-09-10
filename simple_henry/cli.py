@@ -76,6 +76,8 @@ def build_parser() -> argparse.ArgumentParser:
     # Dataset controls
     ap.add_argument("--lag", type=int, default=1,
                     help="Prediction lag [time steps]. Default: 1.")
+    ap.add_argument("--step", type=int, default=None,
+                    help="Step/stride between consecutive window inputs [time steps]. Defaults to lag.")
     ap.add_argument("--overwrite", action="store_true",
                     help="Overwrite existing windows.npz files.")
     ap.add_argument("--max-runs-per-scenario", type=int, default=None,
@@ -85,11 +87,7 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--save-modflow-files", action="store_true",
                     help="Keep all MODFLOW 6 workspace files (default: prune to windows.npz).")
     ap.add_argument("--seed", type=int, default=42,
-                    help="Random seed for train/val/test split. Default: 42.")
-    ap.add_argument("--train-frac", type=float, default=0.7,
-                    help="Fraction of windows in the training split. Default: 0.7.")
-    ap.add_argument("--val-frac", type=float, default=0.15,
-                    help="Fraction of windows in the validation split. Default: 0.15.")
+                    help="Random seed. Default: 42.")
 
     # Executable
     ap.add_argument("--mf6-exe", type=str, default="mf6",
@@ -138,13 +136,12 @@ def run(args: argparse.Namespace):
         hk_field=hk_field,
         vk_field=vk_field,
         lag=args.lag,
+        step=args.step,
         overwrite=args.overwrite,
         max_runs_per_scenario=args.max_runs_per_scenario,
         save_timeseries=args.save_timeseries,
         save_modflow_files=args.save_modflow_files,
         seed=args.seed,
-        train_frac=args.train_frac,
-        val_frac=args.val_frac,
         exe_name=args.mf6_exe,
     )
 

@@ -34,8 +34,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # ---------------------------------------------------------------------------
 # Output directory and prediction lag
 # ---------------------------------------------------------------------------
-OUTDIR="${1:-${OUTDIR:-/Users/$USER/Projects/groundwater/data/simple_henry_data/grid_scenarios_20x40}}"
-LAG="${2:-${LAG:-1}}"
+OUTBASEDIR="${OUTDIR:-/Users/$USER/Projects/groundwater/data/simple_henry_data}"
+LAG="${2:-${LAG:-10}}"
+STEP="${STEP:-$LAG}"
+OUTDIR="${1:-${OUTDIR:-${OUTBASEDIR}/grid_scenarios_lag${LAG}_20x40}}"
 
 # ---------------------------------------------------------------------------
 # Physical parameters (finalized simple Henry values)
@@ -61,8 +63,8 @@ AT="${AT:-0.0}"
 # Initial Concentration Configuration
 # ---------------------------------------------------------------------------
 C_X_TOE_VALUES="${C_X_TOE_VALUES:-"-0.5, 0.0, 0.5"}"
-C_X_TOP_VALUES="${C_X_TOP_VALUES:-"1.0, 1.5"}"
-C_TRANS_WIDTH_VALUES="${C_TRANS_WIDTH_VALUES:-"0.01"}"
+C_X_TOP_VALUES="${C_X_TOP_VALUES:-"1.0, 1.5, 2.0"}"
+C_TRANS_WIDTH_VALUES="${C_TRANS_WIDTH_VALUES:-"0.001, 0.01, 0.05, 0.1"}"
 
 # ---------------------------------------------------------------------------
 # Grid / time controls
@@ -73,14 +75,12 @@ NLAY="${NLAY:-20}"
 LX="${LX:-2.0}"
 LZ="${LZ:-1.0}"
 TOTAL_TIME="${TOTAL_TIME:-2.0}"
-NSTP="${NSTP:-50}"
+NSTP="${NSTP:-100}"
 
 # ---------------------------------------------------------------------------
 # Dataset / split controls
 # ---------------------------------------------------------------------------
 SEED="${SEED:-42}"
-TRAIN_FRAC="${TRAIN_FRAC:-0.7}"
-VAL_FRAC="${VAL_FRAC:-0.15}"
 MAX_RUNS_PER_SCENARIO="${MAX_RUNS_PER_SCENARIO:-}"
 
 # ---------------------------------------------------------------------------
@@ -88,7 +88,7 @@ MAX_RUNS_PER_SCENARIO="${MAX_RUNS_PER_SCENARIO:-}"
 # ---------------------------------------------------------------------------
 MF6_EXE="${MF6_EXE:-$SCRIPT_DIR/.venv/bin/mf6}"
 SAVE_TIMESERIES="${SAVE_TIMESERIES:-0}"
-SAVE_MODFLOW_FILES="${SAVE_MODFLOW_FILES:-1}"
+SAVE_MODFLOW_FILES="${SAVE_MODFLOW_FILES:-0}"
 OVERWRITE="${OVERWRITE:-1}"
 KEEP_RAW="${KEEP_RAW:-0}"
 KAPPA_FILE="${KAPPA_FILE:-}"
@@ -134,9 +134,8 @@ CMD=(
   --at            "$AT"
   --rho0          "$RHO0"
   --lag           "$LAG"
+  --step          "$STEP"
   --seed          "$SEED"
-  --train-frac    "$TRAIN_FRAC"
-  --val-frac      "$VAL_FRAC"
   --mf6-exe       "$MF6_EXE"
 )
 
@@ -183,7 +182,7 @@ echo "  por values:     $POR_VALUES"
 echo "  al / at:        $AL / $AT"
 echo "  rho0:           $RHO0 kg/m³"
 echo "  lag:            $LAG step(s)"
-echo "  split seed:     $SEED  train=$TRAIN_FRAC  val=$VAL_FRAC"
+echo "  seed:           $SEED"
 echo "  save mf6 files: $SAVE_MODFLOW_FILES"
 echo "  mf6 exe:        $MF6_EXE"
 echo "  command:        ${CMD[*]}"
@@ -222,3 +221,32 @@ fi
 echo
 echo "Done. See: $OUTDIR/scenarios_manifest.json"
 
+# ---------------------------------------------------------------------------
+# Compress the output directory recursively into a tar.gz archive
+# ---------------------------------------------------------------------------
+
+cd "$OUTBASEDIR"
+ARCHIVE_NAME="$(basename "$OUTDIR").tar.gz"
+
+tar -czf "$ARCHIVE_NAME" "$(basename "$OUTDIR")"
+
+
+
+# ---------------------------------------------------------------------------
+# Copy the archive to the RDS 
+# ---------------------------------------------------------------------------
+
+# RDS Location
+remote_user=${RDSUSER}
+remote_host=research-data-ext.sydney.edu.au
+remote_path=/rds/${RDSPROJECT}/data/simple_henry/
+    
+filename=$ARCHIVE_NAME
+local_dir=$OUTBASEDIR
+local_file="${local_dir}/${filename}"
+
+echo "Local file: ${local_file}"
+echo "Remote path: ${remote_user}@${remote_host}:${remote_path}${filename}"
+
+# Transfer results to RDS
+sftp "${remote_user}@${remote_host}:${remote_path}" <<< "put -r ${local_file}"

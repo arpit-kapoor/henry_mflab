@@ -203,9 +203,9 @@ def build_and_run_simple_henry(
         head_final : ndarray of shape (nlay, ncol)
         conc_final : ndarray of shape (nlay, ncol)
     If ``return_timeseries=True``:
-        head_ts  : ndarray of shape (nstp, nlay, ncol)
-        conc_ts  : ndarray of shape (nstp, nlay, ncol)
-        times    : ndarray of shape (nstp,)  — end-of-step times [days]
+        head_ts  : ndarray of shape (nstp + 1, nlay, ncol)  — includes t=0
+        conc_ts  : ndarray of shape (nstp + 1, nlay, ncol)  — includes t=0
+        times    : ndarray of shape (nstp + 1,)  — times [days] starting at 0.0
     """
     ws = pl.Path(workspace)
     ws.mkdir(parents=True, exist_ok=True)
@@ -457,8 +457,8 @@ def build_and_run_simple_henry(
     # -----------------------------------------------------------------------
     # Write inputs and run MODFLOW 6
     # -----------------------------------------------------------------------
-    sim.write_simulation()
-    success, _ = sim.run_simulation(silent=False)
+    sim.write_simulation(silent=True)
+    success, _ = sim.run_simulation(silent=True, report=False)
     if not success:
         raise RuntimeError("MODFLOW 6 failed — check the listing file in: " + str(ws))
 
@@ -468,11 +468,21 @@ def build_and_run_simple_henry(
     hobj = flopy.utils.HeadFile(ws / "gwf.hds")
     cobj = flopy.utils.HeadFile(ws / "gwt.ucn", text="CONCENTRATION")
 
-    head_ts = hobj.get_alldata().squeeze()   # shape: (nstp, nlay, ncol)
-    conc_ts = cobj.get_alldata().squeeze()   # shape: (nstp, nlay, ncol)
+    raw_head = hobj.get_alldata()
+    raw_conc = cobj.get_alldata()
+    head_ts = raw_head[:, :, 0, :]   # shape: (nstp, nlay, ncol)
+    conc_ts = raw_conc[:, :, 0, :]   # shape: (nstp, nlay, ncol)
     times   = np.asarray(hobj.get_times(), dtype=float)  # shape: (nstp,)
 
     if return_timeseries:
+        head_0 = np.zeros((1, nlay, ncol), dtype=float)
+        conc_0 = conc0_arr[np.newaxis, :, :].astype(float)
+        time_0 = np.array([0.0], dtype=float)
+
+        head_ts = np.concatenate([head_0, head_ts], axis=0)
+        conc_ts = np.concatenate([conc_0, conc_ts], axis=0)
+        times   = np.concatenate([time_0, times], axis=0)
+
         return head_ts, conc_ts, times
 
     return head_ts[-1], conc_ts[-1]

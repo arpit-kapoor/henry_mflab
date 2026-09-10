@@ -50,12 +50,15 @@ def _broadcast_channel(value, nlay, ncol):
     return np.full((nlay, ncol), float(value), dtype=float)
 
 
-def _valid_window_indices(n_times: int, lag: int) -> np.ndarray:
+def _valid_window_indices(n_times: int, lag: int, step: int | None = None) -> np.ndarray:
     if lag <= 0:
         raise ValueError(f"lag must be >= 1, got {lag}")
+    step_size = lag if step is None else step
+    if step_size <= 0:
+        raise ValueError(f"step must be >= 1, got {step_size}")
     if n_times <= lag:
         return np.empty((0,), dtype=int)
-    return np.arange(0, n_times - lag, dtype=int)
+    return np.arange(0, n_times - lag, step_size, dtype=int)
 
 
 def _prune_run_workspace(run_dir: Path, keep_files: set):
@@ -67,22 +70,6 @@ def _prune_run_workspace(run_dir: Path, keep_files: set):
             child.unlink(missing_ok=True)
         elif child.is_dir():
             shutil.rmtree(child)
-
-
-def _build_splits(ids, train_frac: float, val_frac: float, seed: int) -> dict:
-    if not (0.0 < train_frac < 1.0 and 0.0 < val_frac < 1.0 and train_frac + val_frac < 1.0):
-        raise ValueError("train/val fractions must be in (0,1) and sum to < 1")
-    rng = np.random.default_rng(seed)
-    ids = list(ids)
-    rng.shuffle(ids)
-    n = len(ids)
-    n_train = int(np.floor(train_frac * n))
-    n_val   = int(np.floor(val_frac * n))
-    return {
-        "train": ids[:n_train],
-        "val":   ids[n_train : n_train + n_val],
-        "test":  ids[n_train + n_val :],
-    }
 
 
 def _scenario_tag(beta_c: float, diffc: float) -> str:
@@ -104,6 +91,7 @@ def _build_window_tensors(
     nlay: int,
     ncol: int,
     params: dict,
+    step: int | None = None,
 ):
     """Build (input, output) window tensors from full time-series arrays.
 
@@ -114,6 +102,8 @@ def _build_window_tensors(
         Number of time steps ahead to predict.
     params : dict
         Must contain ``beta_c`` and ``diffc``.
+    step : int or None, optional
+        Stride between consecutive window start times. Defaults to lag.
 
     Returns
     -------
@@ -124,7 +114,7 @@ def _build_window_tensors(
         t_lag_index    : int array of shape (n_windows,)
     or None if there are no valid windows.
     """
-    t_indices = _valid_window_indices(head_ts.shape[0], lag)
+    t_indices = _valid_window_indices(head_ts.shape[0], lag, step=step)
     n_windows = int(t_indices.size)
     if n_windows == 0:
         return None
@@ -188,21 +178,21 @@ def generate_simple_henry_dataset(
     rho0: float = 1000.0,
     # Dataset controls
     lag: int = 1,
+    step: int | None = None,
     overwrite: bool = False,
     max_runs_per_scenario: int | None = None,
     save_timeseries: bool = False,
     save_modflow_files: bool = False,
     seed: int = 42,
-    train_frac: float = 0.7,
-    val_frac: float = 0.15,
     exe_name: str = "mf6",
 ):
     """Generate a windowed dataset for the simplified Henry problem.
 
     For each (beta_c, diffc) *scenario* and each (hk, por) *run* combination
     within that scenario, one MODFLOW 6 simulation is run, time-series outputs
-    are sliced into overlapping (input_t, output_{t+lag}) windows, and the
-    result is saved as ``windows.npz`` alongside a ``manifest.json``.
+    are sliced into (input_t, output_{t+lag}) windows advancing by ``step``
+    (defaults to ``lag``, so sample 1 is t -> t+lag, sample 2 is t+lag -> t+2*lag),
+    and the result is saved as ``windows.npz`` alongside a ``manifest.json``.
 
     Parameters
     ----------
@@ -215,6 +205,8 @@ def generate_simple_henry_dataset(
         Parameters for the initial concentration profile.
     lag : int
         Prediction lag in time steps.
+    step : int or None
+        Stride between consecutive window inputs in time steps. Defaults to ``lag``.
     overwrite : bool
         If False (default) skip runs whose ``windows.npz`` already exists.
     max_runs_per_scenario : int or None
@@ -225,9 +217,7 @@ def generate_simple_henry_dataset(
         If True, keep all MODFLOW 6 workspace files.  If False, prune to
         ``windows.npz`` only.
     seed : int
-        Random seed for train/val/test split.
-    train_frac, val_frac : float
-        Fractions of windows assigned to train and val splits.
+        Random seed (saved to manifest metadata).
     exe_name : str or Path
         MODFLOW 6 executable name or path.
     """
@@ -240,6 +230,9 @@ def generate_simple_henry_dataset(
         raise ValueError("vk from kappa file is incompatible with hk sweep")
 
     dt = total_time / nstp  # time step size [days]
+    step_size = lag if step is None else step
+    if step_size <= 0:
+        raise ValueError(f"step must be >= 1, got {step_size}")
 
     global_window_ids: list[str] = []
     scenarios_summary: list[dict] = []
@@ -268,6 +261,7 @@ def generate_simple_henry_dataset(
         scenario_failures: list[dict] = []
 
         for run_index, (hk, por, c0_x_toe, c0_x_top, c0_trans_width) in enumerate(run_combinations, start=1):
+
             params = {
                 "beta_c":  float(beta_c),
                 "diffc":   float(diffc),
@@ -301,7 +295,7 @@ def generate_simple_henry_dataset(
                 scenario_runs.append(record)
                 continue
 
-            print(f"  [{run_index:04d}/{len(run_combinations):04d}] RUN  {run_tag}")
+            print(f" Scenario [{scenario_index:03d}/{len(scenario_pairs):03d}]  [{run_index:04d}/{len(run_combinations):04d}] RUN  {run_tag}")
             try:
                 head_ts, conc_ts, times = build_and_run_simple_henry(
                     workspace=run_dir,
@@ -335,6 +329,7 @@ def generate_simple_henry_dataset(
                     nlay=nlay,
                     ncol=ncol,
                     params=params,
+                    step=step_size,
                 )
                 if windowed is None:
                     raise ValueError(
@@ -359,6 +354,8 @@ def generate_simple_henry_dataset(
                     "window_ids":           np.asarray(window_ids),
                     "lag":                  int(lag),
                     "lag_days":             float(lag * dt),
+                    "step":                 int(step_size),
+                    "step_days":            float(step_size * dt),
                     "dt":                   float(dt),
                     "grid": {
                         "ncol": ncol,
@@ -414,6 +411,8 @@ def generate_simple_henry_dataset(
             "diffc":           float(diffc),
             "lag":             int(lag),
             "lag_days":        float(lag * dt),
+            "step":            int(step_size),
+            "step_days":       float(step_size * dt),
             "dt":              float(dt),
             "n_total_runs":    len(run_combinations),
             "n_ok_runs":       sum(r["status"] == "ok"      for r in scenario_runs),
@@ -435,12 +434,6 @@ def generate_simple_henry_dataset(
             "n_failed_runs":   scenario_manifest["n_failed_runs"],
         })
 
-    splits = (
-        _build_splits(global_window_ids, train_frac, val_frac, seed)
-        if global_window_ids
-        else {"train": [], "val": [], "test": []}
-    )
-
     manifest = {
         "workflow": "simple_henry_windowed_dataset",
         "pde": {
@@ -459,8 +452,9 @@ def generate_simple_henry_dataset(
         "dispersion": {"al": al, "at": at},
         "lag":        int(lag),
         "lag_days":   float(lag * dt),
-        "train_frac": train_frac,
-        "val_frac":   val_frac,
+        "step":       int(step_size),
+        "step_days":  float(step_size * dt),
+        "seed":       int(seed),
         "n_scenarios":      len(scenario_pairs),
         "n_total_runs":     sum(s["n_total_runs"]   for s in scenarios_summary),
         "n_ok_runs":        sum(s["n_ok_runs"]       for s in scenarios_summary),
@@ -468,7 +462,6 @@ def generate_simple_henry_dataset(
         "n_failed_runs":    sum(s["n_failed_runs"]   for s in scenarios_summary),
         "n_total_windows":  len(global_window_ids),
         "scenarios":        scenarios_summary,
-        "splits":           splits,
         "runs":             run_records,
         "failures":         run_failures,
     }
