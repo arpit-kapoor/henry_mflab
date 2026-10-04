@@ -379,18 +379,47 @@ def main():
         help="Domain vertical extent [m]. Overrides manifest.json value.",
     )
 
-    args = parser.parse_args()
-    animate_simple_henry(
-        dataset_path=args.dataset_path,
-        output_video=args.output,
-        fps=args.fps,
-        dpi=args.dpi,
-        skip_frames=args.skip,
-        run_path=args.run_path,
-        dynamic_scales=args.dynamic_scales,
-        lx=args.lx,
-        lz=args.lz,
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Animate all runs found under --dataset-path.",
     )
+
+    args = parser.parse_args()
+
+    if args.all:
+        ds = pl.Path(args.dataset_path)
+        run_dirs = _find_run_dirs(ds)
+        if not run_dirs:
+            raise FileNotFoundError(
+                f"No run workspaces with gwf.hds and gwt.ucn found under {ds}"
+            )
+        print(f"Found {len(run_dirs)} runs to animate under {ds}")
+        for idx, rdir in enumerate(run_dirs, start=1):
+            print(f"\n[{idx}/{len(run_dirs)}] Animating workspace: {rdir}")
+            animate_simple_henry(
+                dataset_path=args.dataset_path,
+                output_video=None,
+                fps=args.fps,
+                dpi=args.dpi,
+                skip_frames=args.skip,
+                run_path=str(rdir),
+                dynamic_scales=args.dynamic_scales,
+                lx=args.lx,
+                lz=args.lz,
+            )
+    else:
+        animate_simple_henry(
+            dataset_path=args.dataset_path,
+            output_video=args.output,
+            fps=args.fps,
+            dpi=args.dpi,
+            skip_frames=args.skip,
+            run_path=args.run_path,
+            dynamic_scales=args.dynamic_scales,
+            lx=args.lx,
+            lz=args.lz,
+        )
 
 
 if __name__ == "__main__":

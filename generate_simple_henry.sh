@@ -33,11 +33,11 @@ OUTDIR="${1:-/Users/$USER/Projects/groundwater/data/simple_henry_data}"
 #   hk     = 864.0 [m/d]
 #   por    = 0.35
 # ---------------------------------------------------------------------------
-BETA_C_VALUES="${BETA_C_VALUES:-"0.01, 0.05, 0.1, 0.2"}"
+BETA_C_VALUES="${BETA_C_VALUES:-"0.1"}"
 # diffc: effective diffusion coefficient [m²/d].
 # For a 1-day run, diffc=0.01 gives a diffusion timescale τ_diff = Lz²/diffc = 100 days >> 1 day.
 # This prevents premature decay while keeping the system in a convective regime.
-DIFFC_VALUES="${DIFFC_VALUES:-"0.00001, 0.0001, 0.01, 0.1"}"
+DIFFC_VALUES="${DIFFC_VALUES:-"0.01"}"
 # hk: hydraulic conductivity [m/d].
 # For a 1-day run, hk=50.0 keeps the Rayleigh number convective (Ra=350)
 # and limits the maximum Courant number: Co = v_max * dt / dz = (50.0 * 0.07) * 0.01 / 0.05 = 0.7 < 1.0.
@@ -53,6 +53,12 @@ AT="${AT:-0.0}"
 # ---------------------------------------------------------------------------
 # Initial Concentration Configuration
 # ---------------------------------------------------------------------------
+INIT_METHOD="${INIT_METHOD:-random}"  # Options: "wedge", "random"
+
+RANDOM_FIELD_TYPE="${RANDOM_FIELD_TYPE:-"perlin", "mattern", "grf"}"  # Options: "fourier_1d", "fourier", "polynomial", "grbf", "white_noise", "perlin", "grf", "matern", "exp".
+RANDOM_FIELD_SMOOTHNESS="${RANDOM_FIELD_SMOOTHNESS:-1.0, 0.5, 0.2, 0.05}"
+RANDOM_FIELD_COUNT="${RANDOM_FIELD_COUNT:-2}"  # In case of random fields, this determines the number of runs per scenario (i.e., how many random fields to generate for each parameter combination).
+
 C_X_TOE_VALUES="${C_X_TOE_VALUES:-"-0.5, 0.0, 0.5"}"
 C_X_TOP_VALUES="${C_X_TOP_VALUES:-"1.0, 1.5"}"
 C_TRANS_WIDTH_VALUES="${C_TRANS_WIDTH_VALUES:-"0.01"}"
@@ -77,8 +83,6 @@ LAG="${LAG:-1}"
 # Dataset / split controls
 # ---------------------------------------------------------------------------
 SEED="${SEED:-42}"
-TRAIN_FRAC="${TRAIN_FRAC:-0.7}"
-VAL_FRAC="${VAL_FRAC:-0.15}"
 MAX_RUNS_PER_SCENARIO="${MAX_RUNS_PER_SCENARIO:-}"
 
 # ---------------------------------------------------------------------------
@@ -110,9 +114,7 @@ CMD=(
   --lz            "$LZ"
   --total-time    "$TOTAL_TIME"
   --nstp          "$NSTP"
-  --c0-x-toe-values "$C_X_TOE_VALUES"
-  --c0-x-top-values "$C_X_TOP_VALUES"
-  --c0-trans-width-values "$C_TRANS_WIDTH_VALUES"
+  --init-method   "$INIT_METHOD"
   --beta-c-values "$BETA_C_VALUES"
   --diffc-values  "$DIFFC_VALUES"
   --hk-values     "$HK_VALUES"
@@ -122,10 +124,22 @@ CMD=(
   --rho0          "$RHO0"
   --lag           "$LAG"
   --seed          "$SEED"
-  --train-frac    "$TRAIN_FRAC"
-  --val-frac      "$VAL_FRAC"
   --mf6-exe       "$MF6_EXE"
 )
+
+if [[ "$INIT_METHOD" == "random" ]]; then
+  CMD+=(
+    --random-field-type       "$RANDOM_FIELD_TYPE"
+    --random-field-smoothness "$RANDOM_FIELD_SMOOTHNESS"
+    --random-field-count     "$RANDOM_FIELD_COUNT"
+  )
+elif [[ "$INIT_METHOD" == "wedge" ]]; then
+  CMD+=(
+    --c0-x-toe-values   "$C_X_TOE_VALUES"
+    --c0-x-top-values   "$C_X_TOP_VALUES"
+    --c0-trans-width-values "$C_TRANS_WIDTH_VALUES"
+  )
+fi
 
 if [[ -n "$MAX_RUNS_PER_SCENARIO" ]]; then
   CMD+=(--max-runs-per-scenario "$MAX_RUNS_PER_SCENARIO")
@@ -160,7 +174,11 @@ echo "============================================================"
 echo "  outdir:         $OUTDIR"
 echo "  grid:           nlay=$NLAY  ncol=$NCOL  Lx=$LX  Lz=$LZ"
 echo "  time:           total=$TOTAL_TIME d  nstp=$NSTP  dt=$(echo "scale=4; $TOTAL_TIME/$NSTP" | bc) d"
-echo "  initial C:      x_toe=$C_X_TOE_VALUES  x_top=$C_X_TOP_VALUES  trans_width=$C_TRANS_WIDTH_VALUES"
+if [[ "$INIT_METHOD" == "random" ]]; then
+  echo "  initial C:      random (type=$RANDOM_FIELD_TYPE  smoothness=$RANDOM_FIELD_SMOOTHNESS  count=$RANDOM_FIELD_COUNT)"
+else
+  echo "  initial C:      wedge (x_toe=$C_X_TOE_VALUES  x_top=$C_X_TOP_VALUES  trans_width=$C_TRANS_WIDTH_VALUES)"
+fi
 echo "  beta_c values:  $BETA_C_VALUES"
 echo "  diffc values:   $DIFFC_VALUES"
 echo "  hk values:      $HK_VALUES"
@@ -168,7 +186,6 @@ echo "  por values:     $POR_VALUES"
 echo "  al / at:        $AL / $AT"
 echo "  rho0:           $RHO0 kg/m³"
 echo "  lag:            $LAG step(s)"
-echo "  split seed:     $SEED  train=$TRAIN_FRAC  val=$VAL_FRAC"
 echo "  save mf6 files: $SAVE_MODFLOW_FILES"
 echo "  mf6 exe:        $MF6_EXE"
 echo "  animate:        $GENERATE_ANIMATION  (fps=$ANIMATE_FPS  dpi=$ANIMATE_DPI  skip=$ANIMATE_SKIP)"
@@ -217,6 +234,7 @@ PY
     uv run python animate_simple_henry.py
     --dataset-path "$OUTDIR"
     --run-path     "$RUN_WORKSPACE"
+    --all
     --fps          "$ANIMATE_FPS"
     --dpi          "$ANIMATE_DPI"
     --skip         "$ANIMATE_SKIP"
@@ -225,6 +243,7 @@ PY
   echo
   echo "Generating animation from saved outputs"
   echo "  run path:  $RUN_WORKSPACE"
+  echo "Generating animations for all runs from saved outputs"
   echo "  command:   ${ANIMATE_CMD[*]}"
   "${ANIMATE_CMD[@]}"
 fi

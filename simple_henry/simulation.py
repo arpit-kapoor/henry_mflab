@@ -20,6 +20,13 @@ import pathlib as pl
 import flopy
 import numpy as np
 
+try:
+    from . import init_functions
+    from .init_functions import sample_field_2d
+except (ImportError, ValueError):
+    import init_functions
+    from init_functions import sample_field_2d
+
 
 def _to_layer_col_field(value, nlay, ncol, name):
     """Broadcast a scalar or validate an existing (nlay, ncol) array."""
@@ -115,6 +122,76 @@ def create_s_shaped_wedge(
     return c_fresh + (c_sea - c_fresh) * sigmoid
 
 
+def create_random_field(
+    nlay: int = 40,
+    ncol: int = 80,
+    Lx: float = 2.0,
+    Lz: float = 1.0,
+    c_fresh: float = 0.0,
+    c_sea: float = 35.0,
+    field_type: str = "perlin",
+    smoothness: float = 1.0,
+    **kwargs
+):
+    """Create a random field for use in the Henry problem.
+
+    Parameters
+    ----------
+    nlay : int, default=40
+        Number of layers (vertical discretization).
+    ncol : int, default=80
+        Number of columns (horizontal discretization).
+    Lx : float, default=2.0
+        Horizontal domain length [m].
+    Lz : float, default=1.0
+        Vertical domain length [m].
+    c_fresh : float, default=0.0
+        Freshwater solute concentration [kg/m³].
+    c_sea : float, default=35.0
+        Seawater solute concentration [kg/m³].
+    field_type : str, default="perlin"
+        Type of random field to generate.
+    smoothness : float, default=1.0
+        Smoothness of the generated field.
+
+    Returns
+    -------
+    field : np.ndarray of shape (nlay, ncol)
+        Random concentration field scaled to [c_fresh, c_sea].
+    """
+    f = sample_field_2d(
+        res=(ncol, nlay),
+        type=field_type,
+        smoothness=smoothness,
+        amplitude=1.0,
+        **kwargs
+    )
+
+    dx = Lx / ncol
+    dz = Lz / nlay
+    # Normalized cell center coordinates in [0, 1]
+    x_norm = (np.arange(ncol, dtype=float) + 0.5) * (dx / Lx)
+    # Layer 0 is top (z_norm ≈ 1), layer nlay-1 is bottom (z_norm ≈ 0)
+    z_norm = 1.0 - (np.arange(nlay, dtype=float) + 0.5) * (dz / Lz)
+    X_norm, Z_norm = np.meshgrid(x_norm, z_norm)
+
+    # Generate random field values
+    field_values = f((X_norm.ravel(), Z_norm.ravel()))
+    field = field_values.reshape((nlay, ncol))
+
+    # Min-max normalize the field to [c_fresh, c_sea]
+    f_min = float(np.min(field))
+    f_max = float(np.max(field))
+    if f_max > f_min:
+        field_norm = (field - f_min) / (f_max - f_min)
+    else:
+        field_norm = np.zeros_like(field)
+
+    return c_fresh + (c_sea - c_fresh) * field_norm
+
+
+
+
 def build_and_run_simple_henry(
     workspace,
     # Grid parameters
@@ -129,6 +206,11 @@ def build_and_run_simple_henry(
     c0_x_toe: float = None,
     c0_x_top: float = None,
     c0_trans_width: float = None,
+    init_method: str = "wedge",
+    random_field_type: str = "perlin",
+    random_field_smoothness: float = 1.0,
+    random_field_len_scale: float = 0.1,
+    random_field_var: float = 0.1,
     # Hydraulic parameters
     por: float = 0.35,
     hk: float = 864.0,   # horizontal hydraulic conductivity [m/d]  (= κ/μ proxy)
@@ -138,7 +220,7 @@ def build_and_run_simple_henry(
     at: float = 0.0,     # transverse dispersivity [m]
     diffc: float = 0.57024,  # effective molecular diffusion coefficient [m²/d]
     # Density coupling
-    beta_c: float = 0.7,     # solutal expansion coefficient β_C [m³/kg]
+    beta_c: float = 0.0007,  # solutal expansion coefficient β_C [m³/kg]
     rho0: float = 1000.0,    # reference fluid density ρ₀ [kg/m³]  (MF6 BUY default)
     # Optional spatially varying K fields (override scalar hk/vk)
     hk_field=None,
@@ -170,6 +252,16 @@ def build_and_run_simple_henry(
         Simulation duration [days].
     nstp : int
         Number of uniform time steps.
+    init_method : str
+        Method for initializing the concentration field. Options are "wedge" and "random".
+    random_field_type : str
+        Type of random field to generate. Options are "perlin" and "simplex".
+    random_field_smoothness : float
+        Smoothness of the random field. Higher values result in smoother fields.
+    random_field_len_scale : float
+        Length scale of the random field (for GRF, Matern, etc.).
+    random_field_var : float
+        Variance of the random field.
     c0_x_toe, c0_x_top, c0_trans_width : float
         Parameters controlling the initial concentration profile C₀(x, z):
         - c0_x_toe : horizontal position of the wedge toe at the base (z = 0) [m]
@@ -237,9 +329,18 @@ def build_and_run_simple_henry(
     # -----------------------------------------------------------------------
     # Validate / broadcast spatially varying fields
     # -----------------------------------------------------------------------
-    conc0_arr = create_s_shaped_wedge(nlay=nlay, ncol=ncol, Lx=Lx, Lz=Lz,
-                                      x_toe=c0_x_toe, x_top=c0_x_top,
-                                      trans_width=c0_trans_width)
+    if init_method == "wedge":
+        conc0_arr = create_s_shaped_wedge(nlay=nlay, ncol=ncol, Lx=Lx, Lz=Lz,
+                                        x_toe=c0_x_toe, x_top=c0_x_top,
+                                        trans_width=c0_trans_width)
+    elif init_method == "random":
+        conc0_arr = create_random_field(nlay=nlay, ncol=ncol, Lx=Lx, Lz=Lz,
+                                        field_type=random_field_type,
+                                        smoothness=random_field_smoothness,
+                                        len_scale=random_field_len_scale,
+                                        var=random_field_var)
+    else:
+        raise ValueError(f"Unknown init_method: {init_method}")
     hk_arr    = _to_layer_col_field(hk if hk_field is None else hk_field, nlay, ncol, "hk_field")
     vk_arr    = _to_layer_col_field(vk if vk_field is None else vk_field, nlay, ncol, "vk_field")
 
@@ -323,12 +424,14 @@ def build_and_run_simple_henry(
     )
 
     # Buoyancy coupling: maps GWT concentration to density effects in GWF.
-    # DRHODC = dρ/dC = beta_c  (same convention as the original Henry simulation;
-    # for C in kg/m³ this gives ρ(35) ≈ 1000 + 0.7×35 = 1024.5 kg/m³ ✓).
-    # Do NOT multiply by rho0 — the BUY DRHODC column is already dρ/dC directly.
+    # The paper defines the linear equation of state as:
+    #     ρ(C) = ρ₀(1 + β_C C) = ρ₀ + ρ₀ β_C C
+    # Therefore, the density gradient with respect to concentration (DRHODC)
+    # required by the BUY package is dρ/dC = ρ₀ * β_C.
     flopy.mf6.ModflowGwfbuy(
         gwf,
-        packagedata=[(0, beta_c, 0.0, "gwt", "concentration")],
+        denseref=rho0,
+        packagedata=[(0, rho0 * beta_c, 0.0, "gwt", "concentration")],
     )
 
     # -------------------------------------------------------------------
@@ -348,15 +451,12 @@ def build_and_run_simple_henry(
     # -------------------------------------------------------------------
     chd_cells = set()
 
-    # Left and right columns (all layers)
+    # We only want left and right columns (all layers) to be CHD
     for k in range(nlay):
         chd_cells.add((k, 0, 0))          # left
         chd_cells.add((k, 0, ncol - 1))   # right
 
-    # Top and bottom layers (all columns, corners already covered above)
-    for j in range(ncol):
-        chd_cells.add((0, 0, j))           # top
-        chd_cells.add((nlay - 1, 0, j))    # bottom
+    # We remove the top and bottom loops to make those boundaries completely impermeable (no-flow).
 
     # CHD stress period data: (cellid, head)  — no auxiliary concentration
     chd_spd = [(*cell, 0.0) for cell in sorted(chd_cells)]
@@ -410,7 +510,7 @@ def build_and_run_simple_henry(
     # -------------------------------------------------------------------
     # Constant-Concentration (CNC) package:
     #   - Left (j = 0) and top (k = 0) boundaries: C = 0 kg/m³ (fresh groundwater)
-    #   - Right (j = ncol - 1) and bottom (k = nlay - 1) boundaries: C = 35 kg/m³ (seawater interface)
+    #   - Right (j = ncol - 1) and bottom (k = nlay - 1) boundaries: C = 0 kg/m³ (freshwater) on all boundaries
     #
     # This is the GWT analogue of CHD for head. Unlike SSM (which only
     # activates when there is inflow at a stress boundary), CNC directly
@@ -427,11 +527,11 @@ def build_and_run_simple_henry(
     for k in range(nlay):
         cnc_dict[(k, 0, 0)] = c_fresh_bc
 
-    # Right-hand and bottom boundaries: seawater interface (C = 35 kg/m³)
+    # Right-hand and bottom boundaries: freshwater on all boundaries
     for k in range(nlay):
-        cnc_dict[(k, 0, ncol - 1)] = c_sea_bc
+        cnc_dict[(k, 0, ncol - 1)] = c_fresh_bc
     for j in range(ncol):
-        cnc_dict[(nlay - 1, 0, j)] = c_sea_bc
+        cnc_dict[(nlay - 1, 0, j)] = c_fresh_bc
 
     cnc_spd = [(*cell, conc) for cell, conc in sorted(cnc_dict.items())]
     flopy.mf6.ModflowGwtcnc(gwt, stress_period_data=cnc_spd, pname="CNC-1")
