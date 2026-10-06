@@ -1,18 +1,18 @@
 [project]
-name = "henry-mflab"
-version = "0.1.0"
-description = "Add your description here"
+name = "henry-fno-datagen"
+version = "1.0.0"
+description = "MODFLOW 6 data generation for FNO emulation of coupled Henry-type flow and transport problems"
 readme = "README.md"
+license = "MIT"
 requires-python = ">=3.12"
 dependencies = [
     "flopy==3.9.3",
     "numpy==1.26.3",
-    "matplotlib>=3.10.0",
-    "h5py==3.14.0",
-    "zarr==2.18.2",
-    "ipykernel>=7.2.0",
-    "ipywidgets>=8.1.8",
-    "plotly>=7.1.0",
     "gstools>=1.7.0",
-    "noise>=1.2.2",
+]
+
+[dependency-groups]
+notebook = [
+    "matplotlib>=3.10.0",
+    "ipykernel>=7.2.0",
 ]

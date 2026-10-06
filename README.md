@@ -1,179 +1,127 @@
-# Henry Problem – Dynamic Saltwater Intrusion Simulation & Dataset Generator
+# Data generation for "Fourier Neural Operator Emulation for Coupled Parametric PDEs"
 
-This repository simulates transient, coupled variable-density groundwater flow and solute transport based on the Henry saltwater intrusion problem using [MODFLOW 6](https://www.usgs.gov/software/modflow-6-usgs-modular-hydrologic-model) via [FloPy](https://github.com/modflowpy/flopy). It provides an automated pipeline to generate windowed spatio-temporal datasets for surrogate and machine learning model training.
+This code generates the two datasets used in the paper. Both are produced with
+[MODFLOW 6](https://www.usgs.gov/software/modflow-6-usgs-modular-hydrologic-model) through
+[FloPy](https://github.com/modflowpy/flopy). Each dataset couples variable-density groundwater flow
+(an elliptic equation, with no storage) to solute transport (a parabolic equation) through
+ρ(C) = ρ₀(1 + β_C C).
 
----
+| Dataset | Paper | Package | Script |
+|---|---|---|---|
+| Simplified Henry-type problem | Sec. 5 | [`simplified_henry/`](simplified_henry) | [`generate_simplified_henry.sh`](generate_simplified_henry.sh) |
+| Classical Henry-type problem | App. I | [`classical_henry/`](classical_henry) | [`generate_classical_henry.sh`](generate_classical_henry.sh) |
 
-## 🚀 Environment Setup
-
-### Prerequisites
-- Python $\ge 3.12$
-- [uv](https://docs.astral.sh/uv/) for Python package and environment management
-
-### 1. Install Python Dependencies
-```bash
-uv sync
-```
-
-### 2. Download MODFLOW 6 Executable
-Download the USGS MODFLOW 6 binary into the local virtual environment:
-```bash
-uv run python -c "import flopy; flopy.utils.get_modflow(bindir='.venv/bin')"
-```
-Verify that `.venv/bin/mf6` exists and is executable.
+The full datasets (about 0.8 GB and 0.6 GB) are not included because of their size. The scripts
+regenerate them. [`notebooks/visualise_datasets.ipynb`](notebooks/visualise_datasets.ipynb) shows
+example trajectories from both datasets, and its outputs are saved so you can view them without
+running anything.
 
 ---
 
-## 🌊 What is Simulated
+## Setup
 
-The model solves coupled transient groundwater flow (GWF) and solute transport (GWT) in a 2D vertical cross-section (default: $L_x = 8.0\text{ m}, L_z = 4.0\text{ m}$, discretized into $40 \text{ columns} \times 20 \text{ layers}$).
-
-```
-Inland (Freshwater Inflow)                   Coastal Boundary (Dynamic Tides)
-┌──────────────────────────────────────────────┐  z = Lz (4.0 m)
-│  Stochastic Shot-Noise Inflow (WEL)          │
-│  - Poisson storm arrivals                    │  M2 semi-diurnal tides +
-│  - Log-normal peak amplitudes                │  spring-neap envelope (GHB)
-│  - Exponential baseflow recession            │  + dynamic per-layer salinity:
-│  - AR(1) background noise                    │    - Submerged: 35.0 g/L
-│  - Optional wetting / drying drift           │    - Exposed:    0.0 g/L
-│                        Saltwater Wedge       │
-│                             ↗                │
-└──────────────────────────────────────────────┘  z = 0.0 m
-├─────────────────── Lx (8.0 m) ───────────────┤
-```
-
-### Physical & Numerical Dynamics (`henry_data/simulation.py`)
-- **Transient Storage & Flow (`GWF`, `STO`)**: Specific storage ($S_s$) and specific yield ($S_y$) enable realistic transient water-table and pressure response.
-- **Variable-Density Coupling (`BUY`)**: Fluid density depends linearly on concentration via buoyancy coefficient $\beta_c$.
-- **Solute Transport (`GWT`)**: Solves advection (upstream weighting) and dispersion/diffusion with molecular diffusion $D_m$ (`diffc`) and dispersivities ($\alpha_L, \alpha_T$).
-- **Dynamic Coastal Boundary (Right, `GHB`)**:
-  - Head varies according to an M2 semi-diurnal tidal carrier ($T \approx 12.42\text{ h}$) modulated by a fortnightly spring-neap envelope ($T_{\text{sn}} \approx 14.77\text{ days}$) with optional sea-level rise drift and Gaussian noise.
-  - Saltwater inlet concentration at each vertical layer is dynamic: cells submerged by the instantaneous tide receive seawater concentration ($35\text{ g/L}$), while exposed cells receive freshwater ($0\text{ g/L}$).
-- **Dynamic Inland Inflow (Left, `WEL`)**:
-  - Multi-scale freshwater injection driven by a stochastic shot-noise process: storm arrivals sampled from a Poisson process, storm pulse amplitudes sampled from a log-normal distribution, exponential recession decay, and autocorrelated AR(1) noise.
-- **Spin-up Period**: Each run optionally performs a warm-start pre-run (`--spinup-time`) so the salinity wedge reaches a realistic dynamic state before dataset collection begins.
-
----
-
-## 📦 Data Generation
-
-### 1. Automated Coupling & Diffusion Grid Generation
-To generate a complete Cartesian grid of coupling scenarios ($\beta_c \times D_m$) across hydrological parameter variations:
+You need Python ≥ 3.12 and [uv](https://docs.astral.sh/uv/).
 
 ```bash
-./generate_coupling_scenarios.sh [OUTDIR] [LAG]
+uv sync                                   # flopy, numpy, gstools
+uv sync --group notebook                  # optional: matplotlib + ipykernel for the notebook
+
+# MODFLOW 6 binary (version 6.6.3 was used for the paper) into .venv/bin/mf6
+uv run python -c "import flopy; flopy.utils.get_modflow(bindir='.venv/bin', repo='modflow6', release_id='6.6.3')"
 ```
-- **`OUTDIR`** (default: `~/Projects/groundwater/data/henry_data/grid_scenarios_realistic_20x40`): Destination directory.
-- **`LAG`** (default: `1` step): Prediction time-lag between input and target states.
 
-#### Pipeline Flow:
-1. **Simulation Phase (`run_henry.py` / `henry_data.cli`)**: Runs simulation batches across combinations of $\beta_c$, $D_m$, hydraulic conductivity ($K$), porosity ($\theta$), inflow ($Q$), and tidal heads into a temporary `_raw_generation/` directory.
-2. **Reorganization Phase (`henry_data.reorganize`)**: Restructures raw runs into a standardized numeric format (`scenario_01/run_000001/`), writes scenario and run metadata JSON files, and removes temporary raw files.
+The scripts look for `.venv/bin/mf6`. To use another binary, set `MF6_EXE=/path/to/mf6`.
 
-#### Key Environment Variable Overrides:
+## Generating the datasets
+
 ```bash
-# Example: 3x3 scenario grid over 60 simulated days with custom lag in days
-BETA_MIN=0.1 BETA_MAX=1.0 BETA_COUNT=3 \
-DIFFC_MIN=0.01 DIFFC_MAX=0.1 DIFFC_COUNT=3 \
-TOTAL_TIME=60 NSTP=480 LAG_DAYS=1 \
-./generate_coupling_scenarios.sh ./data/my_scenarios 1
+# quick test: 2 runs per scenario (seconds)
+MAX_RUNS_PER_SCENARIO=2 ./generate_simplified_henry.sh ./data/test_simplified
+MAX_RUNS_PER_SCENARIO=2 ./generate_classical_henry.sh  ./data/test_classical
+
+# full datasets as used in the paper
+./generate_simplified_henry.sh    # → ./data/simplified_henry   (16 scenarios × 400 runs)
+./generate_classical_henry.sh     # → ./data/classical_henry    (12 scenarios × 400 runs)
 ```
 
-### 2. Single Scenario Generation
-To generate runs for a single fixed $(\beta_c, D_m)$ scenario:
-```bash
-./generate_one_coupling_scenario.sh [OUTDIR] [BETA_C] [DIFFC] [LAG]
-# Example:
-./generate_one_coupling_scenario.sh ./data/single_scenario 0.7 0.57024 1
-```
+Each scenario runs in its own process (set `N_WORKERS` to change this). A single run takes
+about 0.3 s, so a full dataset needs about 40 CPU-minutes (5–10 minutes on a 14-core laptop). Every setting in the scripts can be overridden from the
+environment, for example `BETA_C_VALUES="0.0007" DIFFC_VALUES="0.57024" ./generate_classical_henry.sh`.
+The Python entry points `run_simplified_henry.py` and `run_classical_henry.py` take the same
+options as command-line flags (`--help`).
 
-### 3. Direct Python CLI
-You can invoke the simulation generator directly via Python:
-```bash
-uv run python run_henry.py \
-  --outdir ./out_custom \
-  --scenario-pairs 0.7:0.57024 \
-  --dynamic-inflow \
-  --dynamic-tides \
-  --add-storage \
-  --total-time 30 \
-  --nstp 240 \
-  --lag 1
-```
+Scenario *i* draws its initial fields (and, for the classical problem, its inflows) from the seed
+`[SEED, i]` (`SEED=42` by default), so the datasets are deterministic.
 
----
+## Problem settings
 
-## 📂 Output Dataset Structure
+Both problems use Ω = (0, 2 m) × (0, 1 m) on a 40 × 20 grid (Δx = Δz = 0.05 m), with porosity
+η = 0.35, ρ₀ = 1000 kg m⁻³, and pure molecular diffusion D = D_C I (zero dispersivity). Each run
+is simulated with 50 MODFLOW time steps, and every second step is kept, giving 25 target frames.
 
-Generated datasets are organized as follows:
+| | Simplified (Sec. 5) | Classical (App. I) |
+|---|---|---|
+| Hydraulic conductivity K | 50 m d⁻¹ | 864 m d⁻¹ |
+| Time horizon / frame spacing | 1 d / 0.04 d | 0.25 d / 0.01 d |
+| β_C [m³ kg⁻¹] | 2×10⁻⁵, 7×10⁻⁵, 2.5×10⁻⁴, 10⁻³ | 3.5×10⁻⁴, 7×10⁻⁴, 1.4×10⁻³ |
+| D_C [m² d⁻¹] | 10⁻³, 3×10⁻³, 10⁻², 3×10⁻² | 0.05, 0.1, 0.3, 0.57024 |
+| Concentration BCs | C = 0 on all sides (CNC) | inflow C = 0 left (WEL), C = 35 where sea water enters right (GHB), no-flux top/bottom |
+| Head BCs | h = 0 left/right, no-flow top/bottom (see below) | inflow Q left, h = L_z right, no-flow top/bottom |
+| Forcing | none (buoyancy only) | Q ~ U[2, 6] m² d⁻¹ per run |
+| Initial condition C₀ | GRF, shifted to ≥ 0, raised-cosine taper (b = 0.1), boundary cells set to 0, scaled to [0, 35] | GRF (period 2, no taper), scaled to [0, 35] |
+
+The GRF has a Gaussian covariance with length scale ℓ ∈ {0.1, 0.3, 0.5, 0.7, 0.9} and variance
+σ² ∈ {0.1, 0.3, 0.5, 0.7}, both in normalised coordinates. There are 20 realisations per (ℓ, σ²)
+pair, giving 400 runs per scenario.
+
+**Head boundary condition (simplified problem).** The dataset used in the paper fixes h = 0 on the
+left and right walls only, so the top and bottom are no-flow (`--head-bc lr`, the default).
+`HEAD_BC=all ./generate_simplified_henry.sh` sets h = 0 on all four sides instead.
+
+**Initial field on the boundary (simplified problem).** The taper w_b(x̃) w_b(z̃) of Eq. (22) is
+evaluated at the cell centres. These lie half a cell inside ∂Ω, so the outer ring of cells (the
+cells that carry the C = 0 condition) is then set to exactly 0, and C₀ satisfies the boundary
+condition on the grid. Note: the simplified dataset used for the paper's experiments was generated
+with an earlier version, which read the taper from the nearest lower node of a
+(ncol + 1) × (nlay + 1) grid. There, C₀ was not exactly zero on the top row and right column.
+In both versions the CNC package holds all boundary cells at C = 0 from the first time step.
+
+## Output format
 
 ```
 <OUTDIR>/
-├── scenarios_manifest.json           # Top-level index of all scenarios and run counts
-└── scenarios/
-    ├── scenario_01/
-    │   ├── scenario_config.json      # Scenario parameters (beta_c, diffc, lag)
-    │   ├── runs_config.json          # Per-run parameter details and execution logs
-    │   ├── run_000001/
-    │   │   └── windows.npz           # Windowed input/output tensors for ML
-    │   └── run_000002/
-    │       └── windows.npz
-    └── scenario_02/
-        └── ...
+├── manifest.json                 # settings, channel names, shapes, per-scenario summary
+└── scenario_NNN/
+    ├── scenario_manifest.json
+    └── scenario.npz              # all runs of one (β_C, D_C) scenario
 ```
 
-### `windows.npz` Arrays:
-- **`input_tensor`** `[N_windows, N_channels, N_lay, N_col]`:
-  - Channels:
-    1. `concentration_t`: Salt concentration at time $t$
-    2. `head_t`: Hydraulic head at time $t$
-    3. `flux_left_boundary`: Inland freshwater inflow flux
-    4. `ghb_flux_right_boundary`: Coastal tidal boundary head / flux
-    5. `cinlet_right_boundary`: Per-layer coastal salinity inlet condition
-    6. `beta_c`: Fluid density coupling coefficient
-    7. `diffc`: Molecular diffusion coefficient
-    8. *(Optional)* `tidal_phase`: Current M2 tidal phase $[0, 2\pi]$ (if enabled)
-- **`output_tensor`** `[N_windows, 2, N_lay, N_col]`:
-  - Channel 0: Salt concentration at future time $t + \Delta t_{\text{lag}}$
-  - Channel 1: Hydraulic head at future time $t + \Delta t_{\text{lag}}$
-- **`t_index`** & **`t_lag_index`**: Time-step indices matching input and prediction horizons.
+Keys in `scenario.npz`:
 
----
+| Key | Simplified | Classical |
+|---|---|---|
+| `input_tensor` | `(n_runs, 3, 25, 20, 40)`: C₀, β_C, D_C | `(n_runs, 7, 25, 20, 40)`: C₀, Q, β_C, D_C, t, z, x |
+| `output_tensor` | `(n_runs, 2, 25, 20, 40)`: C, h | same |
+| `times_out` | target times t₁ … t₂₅ [d] | same |
+| `run_params` | per-run JSON (GRF ℓ, σ², sample index, field seed) | adds the inflow Q |
+| `inflow` | – | `(n_runs,)` Q per run |
 
-## 🧂 Forced Henry (intermediate setup, `henry_forced/`)
+The input channels are repeated along the time axis, so input and output share the
+(t, z, x) = (25, 20, 40) grid of a 3-D FNO. Layer index 0 is the top of the aquifer and column 0
+is the left (inland) boundary. Concentration is in kg m⁻³ and head is equivalent freshwater head
+in m.
 
-Sits between `simple_henry/` (closed box, buoyancy only) and `henry_data/` (tides, storms, storage). It uses the classic [MF6 Henry](https://modflow6-examples.readthedocs.io/en/latest/_examples/ex-gwt-henry.html) boundary conditions so a saltwater wedge forms:
+## Repository layout
 
-- **Left (WEL)**: constant freshwater inflow $Q$ split evenly over the column, $C = 0$
-- **Right (GHB)**: sea-level head $h = L_z$, inflowing water carries $C = 35$ kg/m³
-- **Top / bottom**: no-flow; no storage package (quasi-steady flow)
-- Defaults: $K = 864$ m/d, $\theta = 0.35$, $\rho = \rho_0(1 + \beta_C C)$
-
-Scenarios are the $\beta_C \times D_m$ grid ($\beta_C \le 0.0014$ by default; larger values push the wedge onto the inland boundary). Runs differ by a random initial concentration field and a constant inflow $Q \sim U[2, 6]$ m³/d (classic Henry: 5.7024, low-inflow: 2.851). Each scenario draws its own run set from seed `[SEED, scenario_index]`, so the dataset has a distinct initial field for every run. `SHARED_RUNS=1` reuses one run set in every scenario (paired design).
-
-Since no boundary fixes the concentration, the random initial field is **not** tapered to zero at the edges (unlike `simple_henry`). It is also sampled with period 2 relative to the domain, so opposite edges are not correlated. `RANDOM_FIELD_TAPER=1 RANDOM_FIELD_PERIOD=1.0` restores the simple_henry-style field.
-
-```bash
-./generate_henry_forced_scenarios.sh [OUTDIR]
-# quick test
-MAX_RUNS_PER_SCENARIO=3 BETA_C_VALUES=0.0007 DIFFC_VALUES=0.57024 ./generate_henry_forced_scenarios.sh ./forced_test
+```
+simplified_henry/      simulation.py (MODFLOW 6 model), generators.py (dataset), cli.py, init_functions.py (GRF)
+classical_henry/       simulation.py, generators.py, cli.py (reuses the GRF and helpers above)
+generate_*.sh          dataset scripts with the paper settings
+run_*.py               Python entry points
+notebooks/             visualise_datasets.ipynb
 ```
 
-Each `scenario_NNN/scenario.npz` holds:
-- **`input_tensor`** `[n_runs, 7, T-1, nlay, ncol]`: `concentration_0`, `inflow` (Q broadcast over the domain; `INFLOW_ENCODING=left_column` puts it in the inflow column only), `beta_c`, `diffc`, all repeated over time, then `coord_t`, `coord_z`, `coord_x` (frame time [d], cell-centre elevation and distance [m]). The coordinates are the same for every run. They tell the model where the boundaries are, since every other input except C0 is constant in space (`COORD_CHANNELS=0` drops them)
-- **`output_tensor`** `[n_runs, 2, T-1, nlay, ncol]`: concentration and head at $t_1 \dots t_{T-1}$
-- **`inflow`** `[n_runs]` and **`run_params`** (per-run JSON with IC parameters, field seed and Q)
+## Third-party software
 
-`--init-method seawater` starts from a domain full of seawater (the classic Henry IC), which is useful for checking the setup against the MF6 example.
-
----
-
-## 📊 Exploration & Visualization
-
-- **Notebooks**:
-  - `notebooks/test_scenarios.ipynb` – Inspect and validate generated scenario datasets and manifests.
-  - `notebooks/test_data.ipynb` – Visualize windowed tensor channels, concentration fields, and boundary hydrographs.
-  - `notebooks/test_boundaries.ipynb` – Explore and tune stochastic inflow and tidal boundary parameters.
-- **Animation**:
-  - `animate_henry.py` – Render 2D spatial video / GIF animations of head and salinity fields across time steps.
+MODFLOW 6 (U.S. Geological Survey, public domain), FloPy (CC0) and GSTools (LGPL-3.0).
+This code is released under the MIT licence (see `LICENSE`).

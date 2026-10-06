@@ -1,8 +1,7 @@
-"""MODFLOW 6 simulation for the forced Henry problem.
+"""MODFLOW 6 simulation for the classical Henry-type problem (paper App. I).
 
-Intermediate between ``simple_henry`` (closed box, buoyancy only) and
-``henry_data`` (tides, storms, storage). Uses the classic MF6 Henry boundary
-conditions (ex-gwt-henry) so that a saltwater wedge forms:
+Uses the classical Henry boundary conditions of the MODFLOW 6 example
+``ex-gwt-henry`` so that a saltwater wedge forms:
 
     - Left boundary  (x = 0)  : WEL, constant freshwater inflow Q/nlay per cell, C = 0
     - Right boundary (x = Lx) : GHB, head = Lz, inflowing water carries C = c_sea
@@ -11,7 +10,7 @@ conditions (ex-gwt-henry) so that a saltwater wedge forms:
     - Linear equation of state: ρ(C) = ρ₀(1 + β_C · C)
     - Initial condition: C(x, 0) = C₀(x)  (spatially varying matrix)
 
-Unlike ``simple_henry`` there is no CNC package: concentration at the sea
+Unlike ``simplified_henry`` there is no CNC package: concentration at the sea
 boundary is set by SSM, i.e. c_sea where water enters and the computed
 concentration where it leaves.
 """
@@ -20,10 +19,10 @@ import pathlib as pl
 import flopy
 import numpy as np
 
-from simple_henry.simulation import _to_layer_col_field
+from simplified_henry.simulation import _to_layer_col_field
 
 
-def build_and_run_henry_forced(
+def build_and_run_classical_henry(
     workspace,
     conc0,
     inflow: float = 5.7024,
@@ -37,8 +36,7 @@ def build_and_run_henry_forced(
     nstp: int = 500,
     # Hydraulic parameters
     por: float = 0.35,
-    hk: float = 864.0,   # horizontal hydraulic conductivity [m/d]
-    vk: float = 864.0,   # vertical hydraulic conductivity [m/d]
+    hk: float = 864.0,   # isotropic hydraulic conductivity [m/d]
     # Dispersion parameters
     al: float = 0.0,     # longitudinal dispersivity [m]
     at: float = 0.0,     # transverse dispersivity [m]
@@ -49,12 +47,9 @@ def build_and_run_henry_forced(
     # Sea boundary
     c_sea: float = 35.0,     # seawater concentration [kg/m³]
     ghb_head: float | None = None,  # sea-level head [m]; defaults to Lz
-    # Optional spatially varying K fields (override scalar hk/vk)
-    hk_field=None,
-    vk_field=None,
     exe_name: str = "mf6",
 ):
-    """Build and run the forced Henry saltwater-intrusion problem.
+    """Build and run the classical Henry-type saltwater-intrusion problem.
 
     Parameters
     ----------
@@ -76,8 +71,8 @@ def build_and_run_henry_forced(
         Number of uniform time steps.
     por : float
         Porosity η ∈ (0, 1).
-    hk, vk : float
-        Horizontal and vertical hydraulic conductivity [m/d].
+    hk : float
+        Isotropic hydraulic conductivity [m/d].
     al, at : float
         Longitudinal and transverse dispersivity [m].
     diffc : float
@@ -90,8 +85,6 @@ def build_and_run_henry_forced(
         Concentration of water entering through the sea boundary [kg/m³].
     ghb_head : float or None
         Sea-level (GHB) head [m]. Defaults to the model top ``Lz``.
-    hk_field, vk_field : array_like of shape (nlay, ncol) or None
-        Spatially varying K fields overriding the scalar ``hk`` / ``vk``.
     exe_name : str or Path
         Name or path of the ``mf6`` executable.
 
@@ -123,14 +116,13 @@ def build_and_run_henry_forced(
         ghb_head = top
 
     conc0_arr = _to_layer_col_field(conc0, nlay, ncol, "conc0")
-    hk_arr    = _to_layer_col_field(hk if hk_field is None else hk_field, nlay, ncol, "hk_field")
-    vk_arr    = _to_layer_col_field(vk if vk_field is None else vk_field, nlay, ncol, "vk_field")
+    hk_arr    = _to_layer_col_field(hk, nlay, ncol, "hk")
 
     # -----------------------------------------------------------------------
     # MODFLOW 6 simulation container — single stress period, nstp uniform steps
     # -----------------------------------------------------------------------
     sim = flopy.mf6.MFSimulation(
-        sim_name="henry_forced", sim_ws=str(ws), exe_name=exe
+        sim_name="classical_henry", sim_ws=str(ws), exe_name=exe
     )
 
     flopy.mf6.ModflowTdis(
@@ -184,7 +176,7 @@ def build_and_run_henry_forced(
         gwf,
         icelltype=0,                        # confined
         k=hk_arr.reshape(nlay, nrow, ncol),
-        k33=vk_arr.reshape(nlay, nrow, ncol),
+        k33=hk_arr.reshape(nlay, nrow, ncol),
         save_specific_discharge=True,
     )
 

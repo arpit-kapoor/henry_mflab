@@ -9,10 +9,9 @@ wheels/
 # Virtual environments
 .venv
 
-# Results
+# Generated datasets
+/data
 /out
-/test_out
-/debug_out*
 
 # MacOS
 .DS_Store
@@ -20,3 +19,5 @@ wheels/
 # VS Code
 .vscode/
 
+# Figures saved by the notebook
+/notebooks/figures

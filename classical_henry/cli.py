@@ -1,10 +1,7 @@
-"""Command-line interface for the forced Henry 3-D dataset generator."""
+"""Command-line interface for the classical Henry 3-D dataset generator."""
 import argparse
-import pathlib as pl
 
-import numpy as np
-
-from .generators import INFLOW_ENCODINGS, INIT_METHODS, generate_henry_forced_dataset
+from .generators import INFLOW_ENCODINGS, INIT_METHODS, generate_classical_henry_dataset
 
 
 def _parse_float_csv(values: str) -> list[float]:
@@ -14,18 +11,18 @@ def _parse_float_csv(values: str) -> list[float]:
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
         description=(
-            "Generate 3-D (space × time) datasets for the forced Henry problem "
-            "(classic Henry BCs: constant freshwater inflow on the left, sea-level "
-            "GHB with seawater on the right, zero storage). Each run maps "
-            "input (4, T-1, nlay, ncol) = [C0, inflow, beta_c, diffc] to "
+            "Generate 3-D (space × time) datasets for the classical Henry problem "
+            "(constant freshwater inflow on the left, sea-level GHB with seawater "
+            "on the right, no-flow top/bottom, zero storage). Each run maps "
+            "input (7, T-1, nlay, ncol) = [C0, inflow, beta_c, diffc, t, z, x] to "
             "target (2, T-1, nlay, ncol) = [concentration, head]. "
             "All runs within a scenario are batched into scenario.npz."
         )
     )
 
     # Output
-    ap.add_argument("--outdir", type=str, default="./henry_forced_out",
-                    help="Root output directory. Default: ./henry_forced_out")
+    ap.add_argument("--outdir", type=str, default="./data/classical_henry",
+                    help="Root output directory. Default: ./data/classical_henry")
 
     # Grid
     ap.add_argument("--ncol", type=int, default=40, help="Number of columns. Default: 40.")
@@ -36,32 +33,28 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Domain vertical extent [m]. Default: 1.0.")
 
     # Time
-    ap.add_argument("--total-time", type=float, default=0.5,
-                    help="Simulation duration [days]. Default: 0.5.")
-    ap.add_argument("--nstp", type=int, default=500,
-                    help="Number of uniform MODFLOW time steps. Default: 500.")
-    ap.add_argument("--skip", type=int, default=1,
-                    help="Temporal stride applied as time_series[::skip]. Default: 1.")
+    ap.add_argument("--total-time", type=float, default=0.25,
+                    help="Simulation duration [days]. Default: 0.25.")
+    ap.add_argument("--nstp", type=int, default=50,
+                    help="Number of uniform MODFLOW time steps. Default: 50.")
+    ap.add_argument("--skip", type=int, default=2,
+                    help="Temporal stride applied as time_series[::skip]. Default: 2.")
 
     # Initial concentration
     ap.add_argument("--init-method", type=str, choices=INIT_METHODS, default="random",
-                    help="'random' (random field) or 'seawater' (uniform c_sea, classic "
+                    help="'random' (GRF) or 'seawater' (uniform c_sea, the classical "
                          "Henry IC). Default: random.")
-    ap.add_argument("--random-field-type", type=str, default="grf",
-                    help="Comma-separated random field types (see "
-                         "simple_henry.init_functions.sample_field_2d). Default: grf.")
-    ap.add_argument("--random-field-smoothness", type=str, default="1.0",
-                    help="Comma-separated random field smoothness values. Default: 1.0.")
-    ap.add_argument("--random-field-len-scale", type=str, default="0.1",
-                    help="Comma-separated random field length scales. Default: 0.1.")
-    ap.add_argument("--random-field-var", type=str, default="0.1",
-                    help="Comma-separated random field variances. Default: 0.1.")
-    ap.add_argument("--random-field-count", type=int, default=1,
-                    help="Samples per random-field parameter combination "
-                         "(number of runs for 'seawater'). Default: 1.")
+    ap.add_argument("--random-field-len-scale", type=str, default="0.1, 0.3, 0.5, 0.7, 0.9",
+                    help="Comma-separated GRF length scales (normalised coordinates). "
+                         "Default: 0.1, 0.3, 0.5, 0.7, 0.9.")
+    ap.add_argument("--random-field-var", type=str, default="0.1, 0.3, 0.5, 0.7",
+                    help="Comma-separated GRF variances. Default: 0.1, 0.3, 0.5, 0.7.")
+    ap.add_argument("--random-field-count", type=int, default=20,
+                    help="GRF samples per (len_scale, var) pair "
+                         "(number of runs for 'seawater'). Default: 20.")
     ap.add_argument("--random-field-taper", action=argparse.BooleanOptionalAction, default=False,
-                    help="Taper the 'grf' field to zero on every edge (simple_henry's "
-                         "zero-Dirichlet ICs). Off by default: the forced Henry BCs do not "
+                    help="Taper the GRF to zero on every edge (as in the simplified "
+                         "problem). Off by default: the classical Henry BCs do not "
                          "fix concentration.")
     ap.add_argument("--random-field-period", type=float, default=2.0,
                     help="Periodicity of the gstools random field relative to the domain. "
@@ -82,10 +75,11 @@ def build_parser() -> argparse.ArgumentParser:
                          "where the boundaries are. Default: on (--no-coord-channels drops them).")
 
     # Scenario sweep
-    ap.add_argument("--beta-c-values", type=str, default="0.0007",
-                    help="Comma-separated β_C values [m³/kg]. Default: 0.0007.")
-    ap.add_argument("--diffc-values", type=str, default="0.57024",
-                    help="Comma-separated diffusion coefficients [m²/d]. Default: 0.57024.")
+    ap.add_argument("--beta-c-values", type=str, default="0.00035, 0.0007, 0.0014",
+                    help="Comma-separated β_C values [m³/kg]. Default: 0.00035, 0.0007, 0.0014.")
+    ap.add_argument("--diffc-values", type=str, default="0.05, 0.1, 0.3, 0.57024",
+                    help="Comma-separated diffusion coefficients D_C [m²/d]. "
+                         "Default: 0.05, 0.1, 0.3, 0.57024.")
 
     # Physics
     ap.add_argument("--hk", type=float, default=864.0,
@@ -123,29 +117,11 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--mf6-exe", type=str, default="mf6",
                     help="MODFLOW 6 executable name or path. Default: mf6.")
 
-    # Optional spatially varying K
-    ap.add_argument("--kappa-file", type=str, default=None,
-                    help="Path to an .npz file with 'hk' (and optionally 'vk') arrays "
-                         "of shape (nlay, ncol). Overrides --hk.")
-
     return ap
 
 
 def run(args: argparse.Namespace):
-    outdir = pl.Path(args.outdir)
-    outdir.mkdir(parents=True, exist_ok=True)
-
-    hk_field = vk_field = None
-    if args.kappa_file:
-        data = np.load(args.kappa_file)
-        if "hk" not in data:
-            raise ValueError(f"kappa file {args.kappa_file} must contain 'hk'")
-        hk_field = np.asarray(data["hk"], dtype=float)
-        vk_field = np.asarray(data["vk"], dtype=float) if "vk" in data else hk_field.copy()
-
     init_field_args = {
-        "random_field_type":       [s.strip() for s in args.random_field_type.split(",") if s.strip()],
-        "random_field_smoothness": _parse_float_csv(args.random_field_smoothness),
         "random_field_len_scale":  _parse_float_csv(args.random_field_len_scale),
         "random_field_var":        _parse_float_csv(args.random_field_var),
         "random_field_count":      int(args.random_field_count),
@@ -153,8 +129,8 @@ def run(args: argparse.Namespace):
         "random_field_period":     float(args.random_field_period),
     }
 
-    generate_henry_forced_dataset(
-        outdir=outdir,
+    generate_classical_henry_dataset(
+        outdir=args.outdir,
         beta_c_values=_parse_float_csv(args.beta_c_values),
         diffc_values=_parse_float_csv(args.diffc_values),
         inflow_min=args.inflow_min,
@@ -175,8 +151,6 @@ def run(args: argparse.Namespace):
         at=args.at,
         rho0=args.rho0,
         c_sea=args.c_sea,
-        hk_field=hk_field,
-        vk_field=vk_field,
         skip=args.skip,
         overwrite=args.overwrite,
         max_runs_per_scenario=args.max_runs_per_scenario,
