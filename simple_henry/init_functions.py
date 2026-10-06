@@ -15,6 +15,9 @@ def sample_field_2d(
     smoothness: float = 0.5,
     amplitude: float = 1.0,
     type: str = "grf",
+    seed: int | None = None,
+    taper: bool = True,
+    period: float = 1.0,
 ):
     """
     Parameters
@@ -38,6 +41,15 @@ def sample_field_2d(
         Global amplitude or standard deviation for all sampler types.
     type : str
         One of: "fourier_1d", "fourier", "polynomial", "grbf", "white_noise", "perlin", "grf", "matern", "exp".
+    seed : int or None
+        Seed for the gstools random generator ("grf", "matern", "exp"). None draws a fresh field.
+    taper : bool
+        "grf" only: multiply by a Hann envelope that is zero on every edge (zero-Dirichlet
+        compatible ICs, as in simple_henry). Set False for problems without zero BCs.
+    period : float
+        Periodicity of the gstools Fourier fields ("grf", "matern", "exp") relative to the
+        unit domain. 1.0 makes opposite edges match; > 1 (e.g. 2.0) samples a window of a
+        larger periodic field, removing that artificial edge correlation.
 
     Returns
     -------
@@ -56,6 +68,12 @@ def sample_field_2d(
             rx = ry = int(res)
     else:
         rx = ry = 512
+
+    def _srf(cov):
+        # Fourier-mode spacing is 2π/period, so mode_no scales with the period to keep
+        # the spectral cutoff (π·mode_no/period) fixed; gstools needs an even mode_no.
+        modes = [r if period == 1.0 else 2 * int(np.ceil(r * period / 2)) for r in (rx, ry)]
+        return gs.SRF(cov, generator="Fourier", period=[float(period)] * 2, mode_no=modes, seed=seed)
 
     # Fourier-series generator
     def _fourier():
@@ -117,7 +135,7 @@ def sample_field_2d(
     # Matérn GRF
     def _matern():
         cov = gs.Matern(dim=2, var=var, len_scale=len_scale, nu=smoothness)
-        srf = gs.SRF(cov, generator="Fourier", period=[1.0, 1.0], mode_no=[rx, ry])
+        srf = _srf(cov)
         nx = rx + 1
         ny = ry + 1
         grid_x = np.linspace(0.0, 1.0, nx)
@@ -160,7 +178,7 @@ def sample_field_2d(
             var=var,
             len_scale=len_scale,
         )
-        srf = gs.SRF(cov, generator="Fourier", period=[1.0, 1.0], mode_no=[rx, ry])
+        srf = _srf(cov)
         nx = rx + 1
         ny = ry + 1
         grid_x = np.linspace(0.0, 1.0, nx)
@@ -189,13 +207,15 @@ def sample_field_2d(
             ``0.1`` means the field fades to zero over the outer 10% on each
             side.  Smaller values → sharper transition; larger values → wider
             fade.
+
+        The envelope is skipped when the outer ``taper`` is False.
         """
         cov = gs.Gaussian(
             dim=2,
             var=var,
             len_scale=len_scale,
         )
-        srf = gs.SRF(cov, generator="Fourier", period=[1.0, 1.0], mode_no=[rx, ry])
+        srf = _srf(cov)
         nx = rx + 1
         ny = ry + 1
         grid_x = np.linspace(0.0, 1.0, nx)
@@ -235,7 +255,8 @@ def sample_field_2d(
         field = field - field.min()
 
         # Apply envelope to the non-negative GRF grid
-        field = field * envelope
+        if taper:
+            field = field * envelope
 
 
         def f(x):

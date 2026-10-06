@@ -141,6 +141,34 @@ Generated datasets are organized as follows:
 
 ---
 
+## 🧂 Forced Henry (intermediate setup, `henry_forced/`)
+
+Sits between `simple_henry/` (closed box, buoyancy only) and `henry_data/` (tides, storms, storage). It uses the classic [MF6 Henry](https://modflow6-examples.readthedocs.io/en/latest/_examples/ex-gwt-henry.html) boundary conditions so a saltwater wedge forms:
+
+- **Left (WEL)**: constant freshwater inflow $Q$ split evenly over the column, $C = 0$
+- **Right (GHB)**: sea-level head $h = L_z$, inflowing water carries $C = 35$ kg/m³
+- **Top / bottom**: no-flow; no storage package (quasi-steady flow)
+- Defaults: $K = 864$ m/d, $\theta = 0.35$, $\rho = \rho_0(1 + \beta_C C)$
+
+Scenarios are the $\beta_C \times D_m$ grid ($\beta_C \le 0.0014$ by default; larger values push the wedge onto the inland boundary). Runs differ by a random initial concentration field and a constant inflow $Q \sim U[2, 6]$ m³/d (classic Henry: 5.7024, low-inflow: 2.851). Each scenario draws its own run set from seed `[SEED, scenario_index]`, so the dataset has a distinct initial field for every run. `SHARED_RUNS=1` reuses one run set in every scenario (paired design).
+
+Since no boundary fixes the concentration, the random initial field is **not** tapered to zero at the edges (unlike `simple_henry`). It is also sampled with period 2 relative to the domain, so opposite edges are not correlated. `RANDOM_FIELD_TAPER=1 RANDOM_FIELD_PERIOD=1.0` restores the simple_henry-style field.
+
+```bash
+./generate_henry_forced_scenarios.sh [OUTDIR]
+# quick test
+MAX_RUNS_PER_SCENARIO=3 BETA_C_VALUES=0.0007 DIFFC_VALUES=0.57024 ./generate_henry_forced_scenarios.sh ./forced_test
+```
+
+Each `scenario_NNN/scenario.npz` holds:
+- **`input_tensor`** `[n_runs, 7, T-1, nlay, ncol]`: `concentration_0`, `inflow` (Q broadcast over the domain; `INFLOW_ENCODING=left_column` puts it in the inflow column only), `beta_c`, `diffc`, all repeated over time, then `coord_t`, `coord_z`, `coord_x` (frame time [d], cell-centre elevation and distance [m]). The coordinates are the same for every run. They tell the model where the boundaries are, since every other input except C0 is constant in space (`COORD_CHANNELS=0` drops them)
+- **`output_tensor`** `[n_runs, 2, T-1, nlay, ncol]`: concentration and head at $t_1 \dots t_{T-1}$
+- **`inflow`** `[n_runs]` and **`run_params`** (per-run JSON with IC parameters, field seed and Q)
+
+`--init-method seawater` starts from a domain full of seawater (the classic Henry IC), which is useful for checking the setup against the MF6 example.
+
+---
+
 ## 📊 Exploration & Visualization
 
 - **Notebooks**:
